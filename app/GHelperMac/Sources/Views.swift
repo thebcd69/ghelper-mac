@@ -55,6 +55,17 @@ struct MenuPanel: View {
                 Text("Parlaklık: NullMoth arka ışık denetimi kapalı (boot-arg nvrmacpibl=1, bkz. KURULUM §9)")
                     .font(.caption).foregroundColor(.secondary)
             }
+            if let m = state.ddc {
+                HStack {
+                    Image(systemName: "display")
+                    Slider(value: Binding(get: { Double(state.ddcValue) }, set: { state.setDDC(Int($0.rounded())) }),
+                           in: 0...Double(max(state.ddcMax, 1)), step: 1,
+                           onEditingChanged: { editing in state.ddcDragging = editing })
+                    Text("\(state.ddcValue)").font(.caption.monospacedDigit()).frame(width: 30, alignment: .trailing)
+                }
+                .help("\(m.name): monitörün kendi parlaklığı (DDC/CI, VCP 0x10)")
+                Text("\(m.name) — DDC/CI").font(.caption).foregroundColor(.secondary)
+            }
             HStack {
                 Button("Ayarlar…") {
                     openWindow(id: "editor")

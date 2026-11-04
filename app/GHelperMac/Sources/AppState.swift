@@ -27,12 +27,20 @@ final class AppState: ObservableObject {
     @Published var floors: [Fan: [Int]] = [:]
     @Published var loginItem = false
     @Published var brightness: Float?   // nil = NullMoth published no backlight (nvrmacpibl=1 needed)
+    @Published var ddc: DDCMonitor?     // nil = no external monitor answers DDC/CI (slider hidden)
+    @Published var ddcValue = 0
+    @Published var ddcMax = 100
 
     private var timer: Timer?
     private var lastApply = Date.distantPast
     private var expectedMode: Mode?
     private var wakeObserver: NSObjectProtocol?
     var brightnessDragging = false
+    var ddcDragging = false
+    private var ddcPending: Int?          // latest slider value not yet written (written by one worker at a time)
+    private var ddcWriting = false
+    private var ddcSearching = false
+    private var ddcLastLook = Date.distantPast
     private var autoReapplies: [Date] = []
     private var autoReapplyPaused = false
 
@@ -52,12 +60,17 @@ final class AppState: ObservableObject {
         connect()
         poll()
         timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in self?.poll() }
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil,
+                                               queue: .main) { [weak self] _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self?.ddcLook(force: true) }
+        }
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             self?.note("Uykudan uyandı — 5 sn sonra profil yeniden uygulanacak")
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
                 self?.reapplyChargeLimit(reason: "uyanma")
                 self?.reapplyCurrent(reason: "uyanma")
+                self?.ddcLook(force: true)
             }
         }
         // Startup: like G-Helper, set the saved mode and re-apply its profile.
@@ -98,6 +111,7 @@ final class AppState: ObservableObject {
     func poll() {
         onAC = Self.isOnAC()
         if !brightnessDragging { brightness = Brightness.get() }
+        ddcLook(force: false)
         if !connected { connect(); if !connected { return } }
         info = client.info()
         if info == nil { client.close(); connected = false; return }
@@ -314,6 +328,61 @@ final class AppState: ObservableObject {
         if let a = p.biosPL1, let b = p.biosPL2 { p.pl1 = a; p.pl2 = b }
         updateProfile(m, p)
         apply(mode: m, setMode: true, reason: "varsayılana dönüldü")
+    }
+
+    // MARK: - external monitor brightness (DDC/CI VCP 0x10, DDC.swift)
+
+    /// Find the DDC monitor (every 60 s while none, re-read its value every 30 s), off the main thread.
+    func ddcLook(force: Bool) {
+        let every: TimeInterval = ddc == nil ? 60 : 30
+        guard !ddcSearching, !ddcWriting, !ddcDragging, force || Date().timeIntervalSince(ddcLastLook) >= every else { return }
+        ddcSearching = true
+        ddcLastLook = Date()
+        let known = ddc
+        DDC.queue.async { [weak self] in
+            var result: (DDCMonitor, current: Int, maximum: Int)?
+            if let k = known, !force,
+               let v = DDC.withFramebuffer(k.framebufferID, { DDC.get($0, code: DDC.vcpBrightness) }) {
+                result = (k, current: v.current, maximum: v.maximum)
+            } else {
+                result = DDC.discover()
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.ddcSearching = false
+                if let r = result {
+                    if self.ddc != r.0 { self.note("DDC/CI: \(r.0.name) bulundu (parlaklık \(r.current)/\(r.maximum))") }
+                    self.ddc = r.0
+                    self.ddcMax = r.maximum
+                    if !self.ddcDragging && self.ddcPending == nil { self.ddcValue = r.current }
+                } else if self.ddc != nil {
+                    self.note("DDC/CI: monitör artık yanıt vermiyor, kaydırıcı gizlendi")
+                    self.ddc = nil
+                }
+            }
+        }
+    }
+
+    /// Slider value: written by one worker, the latest value wins, at most one write per ~150 ms.
+    func setDDC(_ v: Int) {
+        guard let m = ddc else { return }
+        let c = min(max(v, 0), ddcMax)
+        ddcValue = c
+        ddcPending = c
+        guard !ddcWriting else { return }
+        ddcWriting = true
+        func next() {
+            guard let value = ddcPending else { ddcWriting = false; return }
+            ddcPending = nil
+            DDC.queue.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                let ok = DDC.withFramebuffer(m.framebufferID) { DDC.set($0, code: DDC.vcpBrightness, value: value) } ?? false
+                DispatchQueue.main.async {
+                    if !ok { self?.note("DDC/CI: parlaklık yazılamadı (\(m.name))") }
+                    next()
+                }
+            }
+        }
+        next()
     }
 
     // MARK: - battery charge limit (DEVS 0x00120057, like G-Helper / Linux charge_control_end_threshold)

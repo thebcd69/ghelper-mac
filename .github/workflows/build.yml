@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: [main]
+    branches: [main, ddc-slider]
   workflow_dispatch:
 
 permissions:
@@ -28,7 +28,8 @@ jobs:
         run: |
           SHORT=$(git rev-parse --short HEAD)
           echo "version=0.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
-          echo "tag=v0.0.${GITHUB_RUN_NUMBER}-${SHORT}" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_NAME" = main ]; then echo "tag=v0.0.${GITHUB_RUN_NUMBER}-${SHORT}" >> "$GITHUB_OUTPUT"
+          else echo "tag=${GITHUB_REF_NAME}-0.0.${GITHUB_RUN_NUMBER}-${SHORT}" >> "$GITHUB_OUTPUT"; fi   # branch builds: not a v0.0.x release
 
       - name: Build kext
         run: kext/ASUSATKD/build.sh "$RUNNER_TEMP/MacKernelSDK" build "${{ steps.ver.outputs.version }}"

@@ -173,3 +173,26 @@ v0.0.4'te `ATKD-ECReadable = No` çıktı: AppleACPIPlatform `evaluateInteger()`
 okuyamıyor. v0.0.5 DSDT eşleştiğinde ERAM (`0xFE108300`) ve ERM2 (`0xFE108B00`) pencerelerini **salt okunur**
 eşleyip alanları ofsetten okur (FTBL, PL01/PL02, FMAE, CTMP, FRMS/FRS2, RSOC, eğri baytları). Tanılama satırında
 `ERAM eşlendi · EC okunuyor` görünmeli; log: `ATKD: ERAM 0xfe108300 / ERM2 0xfe108b00 mapped read-only`.
+
+## 12. Harici monitör parlaklığı (DDC/CI, branch `ddc-slider`)
+
+Menüde, DDC/CI'ya yanıt veren harici monitör bulunursa ekran simgeli ikinci bir kaydırıcı çıkar (ASUS PG27AQDM
+öncelikli). Monitörün **kendi** parlaklığını (VCP 0x10) değiştirir; yazılım karartması değildir. Bulunamazsa kaydırıcı
+gizli kalır.
+
+Gerekenler:
+1. Monitör menüsünde **DDC/CI açık**.
+2. Monitörü süren sürücü I2C arayüzü yayınlamalı:
+   - NVIDIA (Ultimate mod): thebcd69/nvidia-macos-driver `ddc-claude-<sha>` ön sürümündeki NVRMFB
+     (kurulum/geri alma: o depodaki `docs/DDC-STATUS.md`).
+   - Intel (Standart/Eko, sol USB-C): thebcd69/WTLIntelGfx `gu605-ddc` (`docs/GU605-DDC.md`).
+   Resmî NullMoth 2.7.1 NVRMFB'de I2C arayüzü yok → kaydırıcı görünmez (beklenen).
+3. Kontrol (sudo gerekmez): `ioreg -r -w0 -c IOFramebuffer -d1 | grep IOFBI2CInterfaceIDs` bir değer göstermeli.
+
+Davranış: uygulama monitörü açılışta, uyanmada ve ekran değişince arar; yoksa 60 sn'de bir yeniden dener, varsa
+değeri 30 sn'de bir okur (monitörün kendi menüsünden yapılan değişiklik görünür). Sürüklerken en fazla ~150 ms'de
+bir yazar, son değer kazanır. Her istek 0x6E/0x6F (DDC/CI) adresine gider; başka adrese yazılmaz.
+
+Log: `log show --last 1h --style compact --predicate 'eventMessage CONTAINS "GHelperMac: DDC"'`
+- `DDC/CI: <ad> bulundu (parlaklık x/100)` → çalışıyor.
+- `parlaklık yazılamadı` → sürücü isteği reddetti; NVIDIA'da `ioreg … | grep nvrm-ddc-io`, Intel'de `grep XeGfxDdc`.
