@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>ASUSATKD</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.thebcd69.ASUSATKD</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>ASUSATKD</string>
+	<key>CFBundlePackageType</key>
+	<string>KEXT</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@VERSION@</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>GPL-3.0. Derived from G-Helper (seerge) research. GU605MY only.</string>
+	<key>IOKitPersonalities</key>
+	<dict>
+		<key>ASUSATKD</key>
+		<dict>
+			<key>CFBundleIdentifier</key>
+			<string>com.thebcd69.ASUSATKD</string>
+			<key>IOClass</key>
+			<string>ASUSATKD</string>
+			<key>IOMatchCategory</key>
+			<string>ASUSATKD</string>
+			<key>IONameMatch</key>
+			<string>PNP0C14</string>
+			<key>IOProviderClass</key>
+			<string>IOACPIPlatformDevice</string>
+			<key>IOUserClientClass</key>
+			<string>ASUSATKDUserClient</string>
+		</dict>
+	</dict>
+	<key>OSBundleLibraries</key>
+	<dict>
+		<key>com.apple.iokit.IOACPIFamily</key>
+		<string>1.0.0d1</string>
+		<key>com.apple.kpi.bsd</key>
+		<string>16.0</string>
+		<key>com.apple.kpi.iokit</key>
+		<string>16.0</string>
+		<key>com.apple.kpi.libkern</key>
+		<string>16.0</string>
+		<key>com.apple.kpi.mach</key>
+		<string>16.0</string>
+		<key>com.apple.kpi.unsupported</key>
+		<string>16.0</string>
+	</dict>
+	<key>OSBundleRequired</key>
+	<string>Root</string>
+</dict>
+</plist>
