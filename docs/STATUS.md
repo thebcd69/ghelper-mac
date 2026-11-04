@@ -25,6 +25,7 @@ Last update: 2026-11-04 (session 1)
 - fPPT (0x001200C1) is not settable (DEVS returns 0xFFFFFFFE) → not implemented.
 - No mid fan on this model (0x00110031/0x00110032 unsupported).
 
-## Queued (owner request, lower priority)
-- Internal OLED brightness (Samsung ATNA60DL01-0, eDP, panel on NVIDIA via MUX, NullMoth driver):
-  research ACPI _BCM/_BCL on dGPU, NVIDIA WMI-EC backlight, DPCD AUX; implement if feasible.
+## Brightness (owner request)
+- Researched (RESEARCH.md §9): only feasible path = NullMoth's own opt-in `nvrmacpibl=1` (NBCI _DSM -> NVKMS
+  backlight -> AppleBacklightDisplay). App has a menu slider via IODisplay "brightness" (min 5 %), hidden if absent.
+  Owner must add the boot-arg and test; NBCI support for this panel unconfirmed.

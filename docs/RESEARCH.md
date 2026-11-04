@@ -150,6 +150,42 @@ entry copies it to `MNMS` (L53034).
 `_WED(0xFF)` (L77238) → `GANQ` dequeues. Kext does the same on `kIOACPIMessageDeviceNotification` (0xFF)
 so the queue never fills; last event code is exposed for diagnostics only.
 
+## 9. Internal OLED brightness (Samsung ATNA60DL01-0, eDP, panel on NVIDIA via MUX)
+
+Findings (2026-11-04):
+* **ASUS ATKD has no backlight path here.** No brightness device id is used by WMNB for the panel; EC `_Q` brightness
+  hotkeys only call `BRTN(0x86/0x87)` (L30046), which `Notify`s `\_SB.PC00.GFX0.DD1F/DD2F`,
+  `…RP12.PXSX.PEGB.PEGE.DEDP` and `…RP12.PXSX.EDP1` (CondRefOf) — notifications, not control.
+* **ACPI `_BCM/_BCL` exists only on `\_SB.PC00.RP12.PXSX.PEGB.PEGE.DEDP`** (L27553, L27639-27763), inside
+  `If (DGBA != Zero)` — an Intel discrete-graphics (DG) template. Its `_BCM` writes `BCLP`/`ASLC` (Intel OpRegion
+  ASLE mailbox, external `\_SB.PC00.RP12.PXSX.BCLP/ASLC`). Only an Intel graphics driver services that mailbox;
+  with an NVIDIA GPU at RP12 it does nothing (and the device is likely absent). → not usable.
+* **NVIDIA WMI-EC backlight (Linux `nvidia-wmi-ec-backlight`, WMI GUID 603E9613-EF25-4338-A3D0-C46177516DB7 /
+  `WMAA`) is not present**: DSDT `_WDG`s are ATKD (97845ED0…), `\_SB.WFDE`/`WFTE` (ASUS test devices) and
+  `\UAT2` (AHWM). No `WMAA` method. → not applicable.
+* **DPCD AUX from our kext is not safe**: the panel is driven by NVIDIA's GSP firmware through NullMoth's NVRM
+  (open-gpu-kernel-modules 615.78.08 + NVKMS). AUX transactions from a second driver would race GSP/NVKMS link
+  management. DDC/CI on an internal eDP OLED is not implemented by such panels. → rejected.
+* **The feasible path already exists in NullMoth 2.6.6** (verified in tag `v2.6.6`):
+  `kexts/NVRM/os-xnu2.cpp` implements `nv_acpi_dsm_method`/`nv_acpi_dod_method` for the **NBCI `_DSM`**
+  (GUID D4A50B75-65C7-46F7-BFB7-41514CEA0244, functions GETOBJBYTYPE 0x10, GETBACKLIGHT 0x14) and `_DOD` on the GPU's
+  ACPI node — **only with boot-arg `nvrmacpibl=1`** (opt-in since NullMoth 2.0.3 because on some laptops the
+  `_DSM` call hung GPU start). With it, RM answers `NV0073_CTRL_CMD_SPECIFIC_GET_BACKLIGHT_BRIGHTNESS`, NVKMS calls
+  `nvkms_register_backlight()`, and `kexts/NVRMFB/fb/nvrm-fb.cpp::publishBacklight()` publishes a "backlight"
+  service → `AppleBacklightDisplay` → native macOS brightness slider and keys (BrightnessKeys.kext). NVRMFB maps
+  logical 0 → hardware 5 % (never fully black) and persists the level in NVRAM `/options:nullmoth-backlight`.
+  The owner's current boot-args do **not** contain `nvrmacpibl=1` → explains "no brightness control".
+* The NBCI `_DSM` is not in the DSDT; it would be in an OEM SSDT (OC log lists 41 firmware tables, e.g. one with
+  OEM table id `OemNv2T`, 12766 bytes). Not available here → whether GETBACKLIGHT is implemented for this panel is
+  **unconfirmed** until the owner tests. NullMoth logs: `NVRM-xnu: NBCI _DSM 0x14 -> …`, `NVRM-xnu: backlight
+  registered: …`, `fb0: panel backlight at N% …` or `fb0: internal panel, but NVKMS registered no backlight`.
+* Our app: a brightness slider in the menu that uses the public `IODisplayGet/SetFloatParameter("brightness")` on
+  the display NullMoth publishes; hidden (with a hint) when no such parameter exists; never requests < 5 %.
+  No kext code is involved.
+
+Sources: nullmoth/nvidia-macos-driver tag v2.6.6 `kexts/NVRM/os-xnu2.cpp`, `kexts/NVRMFB/fb/nvrm-fb.cpp`,
+main `docs/NVRMFB-BACKLIGHT-POWER.md`, `CHANGELOG.md` (2.0.3, 2.3.2, 2.6.3); Linux `nvidia-wmi-ec-backlight.c` (GUID).
+
 ## Sources
 * DSDT: `EFI/OC/ACPI/DSDT.aml` (owner's USB), decompiled locally.
 * G-Helper `app/AsusACPI.cs`, `app/Mode/ModeControl.cs`, `app/AppConfig.cs` (seerge/g-helper main, fetched 2026-11-04).

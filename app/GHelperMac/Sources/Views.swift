@@ -39,6 +39,18 @@ struct MenuPanel: View {
                 }
             }
             Divider()
+            if let b = state.brightness {
+                HStack {
+                    Image(systemName: "sun.min")
+                    Slider(value: Binding(get: { Double(b) }, set: { state.setBrightness(Float($0)) }),
+                           in: Double(Brightness.minimum)...1.0,
+                           onEditingChanged: { editing in state.brightnessDragging = editing })
+                    Image(systemName: "sun.max")
+                }
+            } else {
+                Text("Parlaklık: NullMoth arka ışık denetimi kapalı (boot-arg nvrmacpibl=1, bkz. KURULUM §9)")
+                    .font(.caption).foregroundColor(.secondary)
+            }
             HStack {
                 Button("Ayarlar…") {
                     openWindow(id: "editor")

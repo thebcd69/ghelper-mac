@@ -25,11 +25,13 @@ final class AppState: ObservableObject {
     @Published var store = Store.load()
     @Published var floors: [Fan: [Int]] = [:]
     @Published var loginItem = false
+    @Published var brightness: Float?   // nil = NullMoth published no backlight (nvrmacpibl=1 needed)
 
     private var timer: Timer?
     private var lastApply = Date.distantPast
     private var expectedMode: Mode?
     private var wakeObserver: NSObjectProtocol?
+    var brightnessDragging = false
 
     var range: PowerRange { onAC ? .ac : .dc }
     var writesEnabled: Bool { info?.has(ATKD.flagWritesEnabled) ?? false }
@@ -88,6 +90,7 @@ final class AppState: ObservableObject {
 
     func poll() {
         onAC = Self.isOnAC()
+        if !brightnessDragging { brightness = Brightness.get() }
         if !connected { connect(); if !connected { return } }
         info = client.info()
         if info == nil { client.close(); connected = false; return }
@@ -293,6 +296,14 @@ final class AppState: ObservableObject {
         if let a = p.biosPL1, let b = p.biosPL2 { p.pl1 = a; p.pl2 = b }
         updateProfile(m, p)
         apply(mode: m, setMode: true, reason: "varsayılana dönüldü")
+    }
+
+    // MARK: - brightness (NullMoth IODisplay parameter, never below Brightness.minimum)
+
+    func setBrightness(_ v: Float) {
+        let c = max(v, Brightness.minimum)
+        brightness = c
+        if !Brightness.set(c) { note("Parlaklık ayarlanamadı (NullMoth arka ışığı yok mu? nvrmacpibl=1)") }
     }
 
     // MARK: - login item

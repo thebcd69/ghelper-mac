@@ -132,3 +132,23 @@ Uygulama ilk açılışta **hiçbir şey yazmaz** (kayıtlı profil yoksa). Siz 
 
 Sorun olursa: `log show --last boot --style compact --predicate 'eventMessage CONTAINS "ATKD:"' > ~/Desktop/atkd.txt`
 ve uygulamadaki tanılama metnini paylaşın.
+
+## 9. Ekran parlaklığı (dahili OLED)
+
+Bu panelin parlaklığını NVIDIA GPU (NullMoth sürücüsü) kontrol ediyor; ASUS ACPI/ATKD tarafında bir parlaklık
+yolu yok. NullMoth 2.6.6'da parlaklık desteği **zaten var ama isteğe bağlı**: boot-arg **`nvrmacpibl=1`** gerekir
+(NullMoth 1401 uygulamasındaki "brightness control" anahtarı da bunu açar). Şu anki boot-args'ınızda yok — bu yüzden
+macOS parlaklık göstermiyor.
+
+1. `config.plist` > `NVRAM > Add > 7C436110-AB2A-4BBB-A880-FE41995C9F82 > boot-args` sonuna ` nvrmacpibl=1` ekleyin
+   (kendiniz; yedek alın). Ya da NullMoth 1401 uygulamasındaki parlaklık anahtarını kullanın.
+2. Yeniden başlatın. Kontrol:
+   `log show --last boot --style compact --predicate 'eventMessage CONTAINS "backlight" OR eventMessage CONTAINS "NBCI"'`
+   - `NVRM-xnu: backlight registered …` ve `fb0: panel backlight at N% …` → çalışıyor: macOS'un kendi parlaklık
+     kaydırıcısı/tuşları ve GHelperMac menüsündeki kaydırıcı etkin olur.
+   - `internal panel, but NVKMS registered no backlight` → bu panel/BIOS için NVIDIA tablosu yanıt vermedi; parlaklık
+     bu yolla mümkün değil. Boot-arg'ı geri alın.
+3. Risk: NullMoth'a göre bazı dizüstülerde bu `_DSM` çağrısı GPU açılışını kilitledi (bu yüzden isteğe bağlı).
+   Açılış siyah ekranda takılırsa: OpenCore'dan USB ile önceki `config.plist` yedeğiyle başlatın veya boot-args'tan
+   `nvrmacpibl=1`'i kaldırın.
+4. NullMoth en düşük seviyeyi donanımda %5'e sabitler (ekran tamamen kararmaz); GHelperMac de %5'in altını istemez.
