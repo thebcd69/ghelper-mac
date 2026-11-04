@@ -152,3 +152,24 @@ macOS parlaklık göstermiyor.
    Açılış siyah ekranda takılırsa: OpenCore'dan USB ile önceki `config.plist` yedeğiyle başlatın veya boot-args'tan
    `nvrmacpibl=1`'i kaldırın.
 4. NullMoth en düşük seviyeyi donanımda %5'e sabitler (ekran tamamen kararmaz); GHelperMac de %5'in altını istemez.
+
+## 10. Pil şarj limiti (v0.0.5+)
+
+Windows/Linux G-Helper'daki şarj limitiyle aynı ASUS ayarı: `DEVS 0x00120057 = yüzde` (Linux
+`charge_control_end_threshold`). Bu BIOS'ta kimlik AML'de yok, istek SMI'ye gidiyor (performans modu gibi). Kext
+açılışta `DSTS 0x00120057` varlık bitini kontrol eder; yoksa şarj limiti kapalı kalır.
+
+- Ayarlar > "Pil şarj limiti": anahtarı açın, kaydırıcıyı %80'e getirip "Uygula"ya basın. Aralık %40–100 (5'er).
+- Değer `profiles.json` içine kaydedilir; uygulama açılışta ve uykudan uyanınca yeniden yazar (EC güç kesilince unutur).
+- Anahtarı kapatmak bir kez %100 yazar (tam şarj).
+- Yazma için kext'in yazma modu gerekir: boot-args'ta `-atkdro` olmamalı. `-atkdro` açıkken değer kaydedilir ama yazılmaz.
+- Kontrol: `log show --last boot --style compact --predicate 'eventMessage CONTAINS "ATKD:"'` →
+  `attached … charge=1(0x0001….)` ve `DEVS charge limit = 80% -> 0x1`. Menüde "Pil / şarj limiti: %xx / %80".
+- Doğrulama: pil %80'in üstündeyken adaptör takılıyken şarj olmamalı (macOS "Şarj edilmiyor" gösterir).
+
+## 11. EC okuma (v0.0.5+)
+
+v0.0.4'te `ATKD-ECReadable = No` çıktı: AppleACPIPlatform `evaluateInteger()` bu DSDT'nin ERAM alanlarını
+okuyamıyor. v0.0.5 DSDT eşleştiğinde ERAM (`0xFE108300`) ve ERM2 (`0xFE108B00`) pencerelerini **salt okunur**
+eşleyip alanları ofsetten okur (FTBL, PL01/PL02, FMAE, CTMP, FRMS/FRS2, RSOC, eğri baytları). Tanılama satırında
+`ERAM eşlendi · EC okunuyor` görünmeli; log: `ATKD: ERAM 0xfe108300 / ERM2 0xfe108b00 mapped read-only`.

@@ -22,7 +22,36 @@ static const uint32_t kExpectedOemRevision   = 0x01072009;
 static const char *const kECAbsPrefix = "\\_SB.PC00.LPCB.EC0.";
 
 static const char *const kECFieldNames[kATKDECFieldCount] = {
-	"FTBL", "PL01", "PL02", "FMAE", "CTMP", "FRMS", "FRS2", "PL1V", "PL2V",
+	"FTBL", "PL01", "PL02", "FMAE", "CTMP", "FRMS", "FRS2", "PL1V", "PL2V", "RSOC",
+};
+
+// EC RAM windows of this DSDT (OperationRegion ERAM/ERM2, SystemMemory). Offsets taken from the
+// Field lists of the GU605MY.329 DSDT (EFI/OC/ACPI/DSDT.aml) and only used when dsdtMatch is set.
+// Needed because AppleACPIPlatform's evaluateInteger() fails on these FieldUnits (test 1, 2026-11-04).
+static const IOPhysicalAddress kERAMBase = 0xFE108300;
+static const IOPhysicalAddress kERM2Base = 0xFE108B00;
+static const IOByteCount       kERAMLen  = 0x100;
+
+struct ERAMField {
+	char    name[5];
+	uint8_t region; // 0 ERAM, 1 ERM2
+	uint8_t offset;
+	uint8_t bytes;  // 1 or 2 (little endian); 0 = single bit
+	uint8_t bit;
+};
+
+static const ERAMField kERAMFields[] = {
+	{"FTBL", 0, 0x06, 1, 0}, {"CTMP", 0, 0x58, 1, 0}, {"FRMS", 0, 0x66, 2, 0}, {"FRS2", 0, 0x68, 2, 0},
+	{"RSOC", 0, 0x77, 1, 0}, {"PL01", 0, 0x9B, 1, 0}, {"PL02", 0, 0x9D, 1, 0}, {"FMAE", 0, 0xCA, 0, 2},
+	{"PL1V", 1, 0x8E, 1, 0}, {"PL2V", 1, 0x8F, 1, 0},
+	{"CTP0", 1, 0x00, 1, 0}, {"CTP1", 1, 0x01, 1, 0}, {"CTP2", 1, 0x02, 1, 0}, {"CTP3", 1, 0x03, 1, 0},
+	{"CTP4", 1, 0x04, 1, 0}, {"CTP5", 1, 0x05, 1, 0}, {"CTP6", 1, 0x06, 1, 0}, {"CTP7", 1, 0x07, 1, 0},
+	{"SCT0", 1, 0x08, 1, 0}, {"SCT1", 1, 0x09, 1, 0}, {"SCT2", 1, 0x0A, 1, 0}, {"SCT3", 1, 0x0B, 1, 0},
+	{"SCT4", 1, 0x0C, 1, 0}, {"SCT5", 1, 0x0D, 1, 0}, {"SCT6", 1, 0x0E, 1, 0}, {"SCT7", 1, 0x0F, 1, 0},
+	{"GTP0", 1, 0x10, 1, 0}, {"GTP1", 1, 0x11, 1, 0}, {"GTP2", 1, 0x12, 1, 0}, {"GTP3", 1, 0x13, 1, 0},
+	{"GTP4", 1, 0x14, 1, 0}, {"GTP5", 1, 0x15, 1, 0}, {"GTP6", 1, 0x16, 1, 0}, {"GTP7", 1, 0x17, 1, 0},
+	{"SGT0", 1, 0x18, 1, 0}, {"SGT1", 1, 0x19, 1, 0}, {"SGT2", 1, 0x1A, 1, 0}, {"SGT3", 1, 0x1B, 1, 0},
+	{"SGT4", 1, 0x1C, 1, 0}, {"SGT5", 1, 0x1D, 1, 0}, {"SGT6", 1, 0x1E, 1, 0}, {"SGT7", 1, 0x1F, 1, 0},
 };
 
 // Current custom curve as written by SFTC/SFTG (ERM2 @ 0xFE108B00), docs/RESEARCH.md §3
@@ -74,6 +103,9 @@ bool ASUSATKD::init(OSDictionary *dict) {
 	lock = nullptr;
 	workLoop = nullptr;
 	notifyTimer = nullptr;
+	eramMap = erm2Map = nullptr;
+	chargePresent = false;
+	chargeLimit = 0;
 	readOnlyArg = forceArg = dsdtMatch = signatureOK = writesEnabled = false;
 	cpuCurveActive = modeIdPresent = ecReadable = false;
 	dsdtOemRevision = 0;
@@ -144,6 +176,8 @@ bool ASUSATKD::start(IOService *provider) {
 
 	checkDSDT();
 	findEC();
+	if (dsdtMatch)
+		mapERAM();
 	checkSignature();
 
 	writesEnabled = signatureOK && (dsdtMatch || forceArg) && !readOnlyArg;
@@ -156,12 +190,17 @@ bool ASUSATKD::start(IOService *provider) {
 		modeIdPresent = true;
 	uint32_t ftbl = 0xFF;
 	ecReadable = readECNameLocked("FTBL", &ftbl) == kIOReturnSuccess;
+	uint32_t cargs[5] = {ATKD_DEV_CHARGE_LIMIT, 0, 0, 0, 0};
+	uint32_t cv = 0;
+	if (wmnbIntegerLocked(ATKD_METHOD_DSTS, cargs, &cv) == kIOReturnSuccess && cv != ATKD_UNSUPPORTED &&
+	    (cv & ATKD_PRESENT_BIT))
+		chargePresent = true;
 	IOLockUnlock(lock);
 
-	ATKDLOG("attached to \\_SB.ATKD v0.1.0 abi=%u dsdtMatch=%d (oemrev 0x%08x) signature=%d ec=%d "
-	        "modeId=%d(0x%08x) ftbl=%u ro=%d force=%d -> writes %s",
-	        ATKD_ABI_VERSION, dsdtMatch, dsdtOemRevision, signatureOK, ecReadable, modeIdPresent, v,
-	        ftbl, readOnlyArg, forceArg, writesEnabled ? "ENABLED" : "DISABLED");
+	ATKDLOG("attached to \\_SB.ATKD abi=%u dsdtMatch=%d (oemrev 0x%08x) signature=%d ec=%d (eram=%d) "
+	        "modeId=%d(0x%08x) ftbl=%u charge=%d(0x%08x) ro=%d force=%d -> writes %s",
+	        ATKD_ABI_VERSION, dsdtMatch, dsdtOemRevision, signatureOK, ecReadable, eramMap != nullptr,
+	        modeIdPresent, v, ftbl, chargePresent, cv, readOnlyArg, forceArg, writesEnabled ? "ENABLED" : "DISABLED");
 
 	setProperty("ATKD-WritesEnabled", writesEnabled);
 	setProperty("ATKD-DSDTMatch", dsdtMatch);
@@ -178,6 +217,7 @@ void ASUSATKD::stop(IOService *provider) {
 		OSSafeReleaseNULL(notifyTimer);
 	}
 	OSSafeReleaseNULL(workLoop);
+	unmapERAM();
 	OSSafeReleaseNULL(ec);
 	OSSafeReleaseNULL(atkd);
 	ATKDLOG("stopped");
@@ -332,7 +372,56 @@ IOReturn ASUSATKD::dstsBufferLocked(uint32_t devId, uint32_t arg, uint8_t *out, 
 	return r;
 }
 
+static IOMemoryMap *mapPhysReadOnly(IOPhysicalAddress pa, IOByteCount len) {
+	IOMemoryDescriptor *md = IOMemoryDescriptor::withPhysicalAddress(pa, len, kIODirectionIn);
+	if (!md)
+		return nullptr;
+	IOMemoryMap *m = md->map(kIOMapInhibitCache | kIOMapReadOnly);
+	md->release(); // the map keeps its own reference
+	return m;
+}
+
+void ASUSATKD::mapERAM() {
+	eramMap = mapPhysReadOnly(kERAMBase, kERAMLen);
+	erm2Map = mapPhysReadOnly(kERM2Base, kERAMLen);
+	if (!eramMap || !erm2Map) {
+		ATKDLOG("ERAM map failed (eram=%p erm2=%p), falling back to ACPI evaluation", eramMap, erm2Map);
+		unmapERAM();
+		return;
+	}
+	ATKDLOG("ERAM 0x%llx / ERM2 0x%llx mapped read-only", static_cast<unsigned long long>(kERAMBase),
+	        static_cast<unsigned long long>(kERM2Base));
+}
+
+void ASUSATKD::unmapERAM() {
+	OSSafeReleaseNULL(eramMap);
+	OSSafeReleaseNULL(erm2Map);
+}
+
+bool ASUSATKD::readERAMLocked(const char *name, uint32_t *out) {
+	if (!eramMap || !erm2Map)
+		return false;
+	for (const auto &f : kERAMFields) {
+		if (memcmp(f.name, name, 4) != 0 || name[4] != 0)
+			continue;
+		IOMemoryMap *m = f.region == 0 ? eramMap : erm2Map;
+		auto base = reinterpret_cast<volatile const uint8_t *>(m->getVirtualAddress());
+		if (!base || f.offset + (f.bytes ? f.bytes : 1) > m->getLength())
+			return false;
+		if (f.bytes == 0)
+			*out = (base[f.offset] >> f.bit) & 1u;
+		else if (f.bytes == 1)
+			*out = base[f.offset];
+		else
+			*out = static_cast<uint32_t>(base[f.offset]) | (static_cast<uint32_t>(base[f.offset + 1]) << 8);
+		return true;
+	}
+	return false;
+}
+
 IOReturn ASUSATKD::readECNameLocked(const char *name, uint32_t *out) {
+	if (readERAMLocked(name, out))
+		return kIOReturnSuccess;
 	UInt32 v = 0;
 	if (ec && ec->evaluateInteger(name, &v) == kIOReturnSuccess) {
 		*out = v;
@@ -362,7 +451,10 @@ void ASUSATKD::getInfo(ATKDInfo *out) {
 	if (ecReadable)     f |= kATKDFlagECFound;
 	if (modeIdPresent)  f |= kATKDFlagModeIdPresent;
 	if (forceArg)       f |= kATKDFlagForceArg;
+	if (chargePresent)  f |= kATKDFlagChargePresent;
+	if (eramMap)        f |= kATKDFlagERAMMapped;
 	out->flags = f;
+	out->chargeLimit = chargeLimit;
 	out->dsdtOemRevision = dsdtOemRevision;
 	out->lastEvent = lastEvent;
 	out->eventCount = eventCount;
@@ -384,6 +476,7 @@ IOReturn ASUSATKD::dsts(uint32_t devId, uint32_t arg, uint32_t *out) {
 	case ATKD_DEV_PPT_PL1_SPL:
 	case ATKD_DEV_PPT_PL2_SPPT:
 	case ATKD_DEV_PPT_FPPT:
+	case ATKD_DEV_CHARGE_LIMIT:
 		break;
 	default:
 		return kIOReturnNotPermitted;
@@ -602,6 +695,34 @@ IOReturn ASUSATKD::setMode(uint32_t mode, uint32_t *biosRet) {
 		ATKDLOG("DEVS mode = %u -> 0x%x (ior 0x%x)", mode, ret, r);
 		if (r == kIOReturnSuccess && ret != 1)
 			r = ret == ATKD_UNSUPPORTED ? kIOReturnUnsupported : kIOReturnError;
+	}
+	IOLockUnlock(lock);
+	return r;
+}
+
+IOReturn ASUSATKD::setChargeLimit(uint32_t percent, uint32_t *biosRet) {
+	if (percent < ATKD_CHARGE_MIN || percent > ATKD_CHARGE_MAX) {
+		ATKDLOG("charge limit reject: %u%% outside [%u,%u]", percent, ATKD_CHARGE_MIN, ATKD_CHARGE_MAX);
+		return kIOReturnBadArgument;
+	}
+	IOLockLock(lock);
+	IOReturn r = writeGateLocked("charge limit");
+	if (r == kIOReturnSuccess && !chargePresent) {
+		ATKDLOG("charge limit refused: DSTS 0x%08x has no presence bit", ATKD_DEV_CHARGE_LIMIT);
+		r = kIOReturnUnsupported;
+	}
+	if (r == kIOReturnSuccess) {
+		uint32_t args[5] = {ATKD_DEV_CHARGE_LIMIT, percent, 0, 0, 0};
+		uint32_t ret = 0;
+		r = wmnbIntegerLocked(ATKD_METHOD_DEVS, args, &ret);
+		*biosRet = ret;
+		lastBiosResult = ret;
+		writeCount++;
+		ATKDLOG("DEVS charge limit = %u%% -> 0x%x (ior 0x%x)", percent, ret, r);
+		if (r == kIOReturnSuccess && ret != 1)
+			r = ret == ATKD_UNSUPPORTED ? kIOReturnUnsupported : kIOReturnError;
+		if (r == kIOReturnSuccess)
+			chargeLimit = percent;
 	}
 	IOLockUnlock(lock);
 	return r;

@@ -121,6 +121,8 @@ struct ModeProfile: Codable, Equatable {
 
 struct Store: Codable {
     var lastMode: Int?
+    /// Battery charge end threshold in % (ATKD.chargeMin...100); nil = not managed by the app.
+    var chargeLimit: Int?
     var profiles: [String: ModeProfile] = [:]
 
     func profile(_ m: Mode) -> ModeProfile { profiles[String(m.rawValue)] ?? ModeProfile() }

@@ -11,7 +11,7 @@
 
 #include <stdint.h>
 
-#define ATKD_ABI_VERSION        1u
+#define ATKD_ABI_VERSION        2u
 #define ATKD_SERVICE_CLASS      "ASUSATKD"
 
 // ---- IOUserClient selectors ----
@@ -24,6 +24,7 @@ enum {
 	kATKDSelSetMode         = 5, // in: scalar[0]=mode (0 Balanced,1 Turbo,2 Silent) ; out: scalar[0]=BIOS ret
 	kATKDSelReadEC          = 6, // in: scalar[0]=ATKDECField ; out: scalar[0]=value
 	kATKDSelReadCurve       = 7, // in: scalar[0]=fan (0 CPU,1 GPU) ; out: struct 16 bytes (current EC curve)
+	kATKDSelSetChargeLimit  = 8, // in: scalar[0]=percent (ATKD_CHARGE_MIN..100) ; out: scalar[0]=BIOS ret
 	kATKDSelCount
 };
 
@@ -47,6 +48,7 @@ enum {
 	kATKDECFieldFRS2 = 6, // GPU fan period
 	kATKDECFieldPL1V = 7, // diagnostics, meaning unconfirmed
 	kATKDECFieldPL2V = 8, // diagnostics, meaning unconfirmed
+	kATKDECFieldRSOC = 9, // battery relative state of charge, % (ABI 2)
 	kATKDECFieldCount
 };
 
@@ -64,6 +66,7 @@ enum {
 #define ATKD_DEV_PPT_PL2_SPPT   0x001200A0u
 #define ATKD_DEV_PPT_PL1_SPL    0x001200A3u
 #define ATKD_DEV_PPT_FPPT       0x001200C1u // DSTS present, DEVS unsupported -> read only
+#define ATKD_DEV_CHARGE_LIMIT   0x00120057u // RSOC charge end threshold; not in AML -> SMI (WCHK), runtime presence check
 #define ATKD_UNSUPPORTED        0xFFFFFFFEu
 #define ATKD_PRESENT_BIT        0x00010000u
 
@@ -72,6 +75,8 @@ enum {
 #define ATKD_PL1_MAX_W          90u   // asus-armoury GU605M AC max
 #define ATKD_PL2_MIN_W          28u   // asus-armoury GU605M AC min
 #define ATKD_PL2_MAX_W          135u  // asus-armoury GU605M AC max
+#define ATKD_CHARGE_MIN         40u   // G-Helper minimum
+#define ATKD_CHARGE_MAX         100u  // 100 = no limit
 #define ATKD_FAN_POINTS         8u
 #define ATKD_FAN_CURVE_BYTES    16u
 #define ATKD_DSTS_BUF_BYTES     32u
@@ -86,6 +91,8 @@ enum {
 	kATKDFlagECFound        = 1u << 5, // EC0 fields readable
 	kATKDFlagModeIdPresent  = 1u << 6, // DSTS 0x00120075 has presence bit
 	kATKDFlagForceArg       = 1u << 7, // -atkdforce
+	kATKDFlagChargePresent  = 1u << 8, // DSTS 0x00120057 has presence bit (ABI 2)
+	kATKDFlagERAMMapped     = 1u << 9, // EC fields read from the mapped ERAM/ERM2 window (ABI 2)
 };
 
 typedef struct {
@@ -97,7 +104,8 @@ typedef struct {
 	uint32_t writeCount;
 	uint32_t lastBiosResult;
 	uint32_t pl1MinW, pl1MaxW, pl2MinW, pl2MaxW;
-	uint32_t reserved[5];
+	uint32_t chargeLimit;    // last charge limit written by the kext since boot, 0 = none (ABI 2)
+	uint32_t reserved[4];
 } ATKDInfo; // 64 bytes
 
 #endif /* ATKDShared_h */

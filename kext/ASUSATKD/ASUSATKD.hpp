@@ -15,6 +15,7 @@
 #include <IOKit/acpi/IOACPIPlatformDevice.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOTimerEventSource.h>
+#include <IOKit/IOMemoryDescriptor.h>
 #include "ATKDShared.h"
 
 #define ATKDLOG(fmt, ...) IOLog("ATKD: " fmt "\n", ##__VA_ARGS__)
@@ -39,6 +40,7 @@ public:
 	IOReturn setMode(uint32_t mode, uint32_t *biosRet);
 	IOReturn readEC(uint32_t field, uint32_t *out);
 	IOReturn readCurve(uint32_t fan, uint8_t *out16);
+	IOReturn setChargeLimit(uint32_t percent, uint32_t *biosRet);
 
 private:
 	IOACPIPlatformDevice *atkd;
@@ -46,6 +48,8 @@ private:
 	IOLock               *lock;
 	IOWorkLoop           *workLoop;
 	IOTimerEventSource   *notifyTimer;  // defers _WED draining out of the ACPI notify context
+	IOMemoryMap          *eramMap;      // ERAM @0xFE108300 (read-only, only with dsdtMatch)
+	IOMemoryMap          *erm2Map;      // ERM2 @0xFE108B00 (read-only, only with dsdtMatch)
 
 	bool     readOnlyArg;
 	bool     forceArg;
@@ -55,6 +59,8 @@ private:
 	bool     cpuCurveActive;
 	bool     modeIdPresent;
 	bool     ecReadable;
+	bool     chargePresent;
+	uint32_t chargeLimit;
 	uint32_t dsdtOemRevision;
 	uint32_t lastEvent;
 	uint32_t eventCount;
@@ -70,6 +76,9 @@ private:
 	IOReturn readECNameLocked(const char *name, uint32_t *out);
 	bool     validateECObject(const char *name);
 	void     findEC();
+	void     mapERAM();
+	void     unmapERAM();
+	bool     readERAMLocked(const char *name, uint32_t *out);
 	void     checkDSDT();
 	void     checkSignature();
 	IOReturn writeGateLocked(const char *what);
@@ -105,6 +114,7 @@ private:
 	static IOReturn sSetMode(OSObject *target, void *ref, IOExternalMethodArguments *a);
 	static IOReturn sReadEC(OSObject *target, void *ref, IOExternalMethodArguments *a);
 	static IOReturn sReadCurve(OSObject *target, void *ref, IOExternalMethodArguments *a);
+	static IOReturn sSetChargeLimit(OSObject *target, void *ref, IOExternalMethodArguments *a);
 };
 
 #endif /* ASUSATKD_hpp */

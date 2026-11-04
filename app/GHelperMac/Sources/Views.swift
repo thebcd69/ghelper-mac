@@ -23,6 +23,10 @@ struct MenuPanel: View {
                     GridRow { Text("PL1 / PL2 (EC)"); Text("\(state.pl1Now.map(String.init) ?? "?") / \(state.pl2Now.map(String.init) ?? "?") W") }
                     GridRow { Text("Özel eğri (FMAE)"); Text(state.fmae.map { $0 ? "aktif" : "kapalı" } ?? "?") }
                     GridRow { Text("Güç kaynağı"); Text(state.onAC ? "Adaptör" : "Pil") }
+                    GridRow {
+                        Text("Pil / şarj limiti")
+                        Text("\(state.battery.map { "%\($0)" } ?? "?") / \(state.store.chargeLimit.map { "%\($0)" } ?? "kapalı")")
+                    }
                 }.font(.callout)
 
                 Picker("Mod", selection: Binding(
@@ -130,6 +134,7 @@ struct EditorView: View {
     @State private var profile = ModeProfile()
     @State private var loaded = false
     @State private var showLog = false
+    @State private var chargeDraft = 80
 
     var body: some View {
         ScrollView {
@@ -182,6 +187,28 @@ struct EditorView: View {
                     }.padding(6)
                 } label: { Text("CPU güç limitleri").font(.title3) }
 
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Şarj limitini kullan", isOn: Binding(
+                            get: { state.store.chargeLimit != nil },
+                            set: { on in
+                                if on { state.setChargeLimit(chargeDraft) } else { state.clearChargeLimit() }
+                            }))
+                        .disabled(!state.connected || !state.chargeSupported)
+                        HStack {
+                            Slider(value: Binding(get: { Double(chargeDraft) }, set: { chargeDraft = Int($0.rounded()) }),
+                                   in: Double(ATKD.chargeMin)...Double(ATKD.chargeMax), step: 5)
+                            Text("%\(chargeDraft)").monospacedDigit().frame(width: 44, alignment: .trailing)
+                            Button("Uygula") { state.setChargeLimit(chargeDraft) }
+                                .disabled(!state.connected || !state.chargeSupported)
+                        }
+                        Text(state.chargeSupported
+                             ? "Pil bu yüzdeye kadar şarj olur (Windows/Linux G-Helper ile aynı ASUS ayarı). Açılışta ve uyanınca yeniden yazılır. Kapatınca %100'e döner."
+                             : "BIOS şarj limiti aygıtını (0x00120057) bildirmedi — bu makinede kullanılamıyor.")
+                            .font(.caption).foregroundColor(.secondary)
+                    }.padding(6)
+                } label: { Text("Pil şarj limiti").font(.title3) }
+
                 HStack {
                     Button("Kaydet ve uygula") { saveAndApply() }
                         .keyboardShortcut(.defaultAction)
@@ -205,7 +232,7 @@ struct EditorView: View {
                             Text(String(format: "kext ABI %u, flags 0x%02X, DSDT oemrev 0x%08X, olay %u (son 0x%X), yazma %u, son BIOS 0x%X",
                                         i.abiVersion, i.flags, i.dsdtOemRevision, i.eventCount, i.lastEvent, i.writeCount, i.lastBiosResult))
                                 .font(.caption.monospaced())
-                            Text("yazma \(i.has(ATKD.flagWritesEnabled) ? "açık" : "kapalı") · DSDT \(i.has(ATKD.flagDSDTMatch) ? "eşleşti" : "eşleşmedi") · EC \(i.has(ATKD.flagECFound) ? "okunuyor" : "yok") · mod-ID \(i.has(ATKD.flagModeIdPresent) ? "var" : "yok")")
+                            Text("yazma \(i.has(ATKD.flagWritesEnabled) ? "açık" : "kapalı") · DSDT \(i.has(ATKD.flagDSDTMatch) ? "eşleşti" : "eşleşmedi") · EC \(i.has(ATKD.flagECFound) ? "okunuyor" : "yok") · mod-ID \(i.has(ATKD.flagModeIdPresent) ? "var" : "yok") · ERAM \(i.has(ATKD.flagERAMMapped) ? "eşlendi" : "yok") · şarj \(i.has(ATKD.flagChargePresent) ? "var" : "yok")\(i.chargeLimit > 0 ? " (%\(i.chargeLimit))" : "")")
                                 .font(.caption)
                         }
                         ForEach(Array(state.log.suffix(60).enumerated()), id: \.offset) { _, line in
@@ -221,6 +248,7 @@ struct EditorView: View {
             if !loaded {
                 editMode = state.mode ?? .balanced
                 profile = state.profileForEditing(editMode)
+                chargeDraft = state.store.chargeLimit ?? 80
                 loaded = true
             }
         }

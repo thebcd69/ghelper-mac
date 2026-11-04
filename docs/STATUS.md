@@ -1,6 +1,6 @@
 # STATUS
 
-Last update: 2026-11-04 (session 1, end)
+Last update: 2026-11-04 (session 2)
 
 ## Done
 - Research: DSDT decompiled/analysed; IDs, byte formats, PL ranges, brightness path → `docs/RESEARCH.md`.
@@ -14,6 +14,14 @@ Last update: 2026-11-04 (session 1, end)
 - CI `.github/workflows/build.yml` (macos-14, Xcode 15.4) green; prereleases `v0.0.<run>-<sha>` with zip
   (kext + app + KURULUM.md + LICENSE).
 - Docs: `docs/KURULUM.md` (Turkish install/test/backout/log meanings, brightness §9), README with attribution.
+
+## Hardware test 1 (2026-11-04, v0.0.4-5df5737, `-atkdro`)
+- Kext attached to `\_SB.ATKD`, `ATKD-DSDTMatch = Yes`, `WritesEnabled = No` (expected, `-atkdro`), app user client opened.
+- **`ATKD-ECReadable = No`**: `evaluateInteger()` fails on the ERAM FieldUnits (EC0 nub exists at LPCB/EC0)
+  → mode, PL1/PL2, FMAE unreadable; RPM only via DSTS (100 RPM steps).
+- v0.0.5 (this session): ERAM/ERM2 mapped read-only (offsets from the DSDT Field lists, only with dsdtMatch),
+  battery charge limit (DEVS 0x00120057, 40–100 %, runtime DSTS presence check, re-applied at launch/wake),
+  ABI 2 (selector 8, flags ChargePresent/ERAMMapped, info.chargeLimit, EC field RSOC). See KURULUM §10–11.
 
 ## Not verified (no hardware access)
 - Nothing has run on the real machine. First boot test per KURULUM §3 (read-only) is the next step.

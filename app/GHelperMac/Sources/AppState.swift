@@ -18,6 +18,7 @@ final class AppState: ObservableObject {
     @Published var pl1Now: Int?
     @Published var pl2Now: Int?
     @Published var fmae: Bool?
+    @Published var battery: Int?        // EC RSOC %
     @Published var onAC = true
     @Published var busy = false
     @Published var status = ""
@@ -37,6 +38,7 @@ final class AppState: ObservableObject {
 
     var range: PowerRange { onAC ? .ac : .dc }
     var writesEnabled: Bool { info?.has(ATKD.flagWritesEnabled) ?? false }
+    var chargeSupported: Bool { info?.has(ATKD.flagChargePresent) ?? false }
 
     var menuTitle: String {
         var s = cpuTemp.map { "\($0)°" } ?? "--°"
@@ -53,7 +55,10 @@ final class AppState: ObservableObject {
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             self?.note("Uykudan uyandı — 5 sn sonra profil yeniden uygulanacak")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { self?.reapplyCurrent(reason: "uyanma") }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                self?.reapplyChargeLimit(reason: "uyanma")
+                self?.reapplyCurrent(reason: "uyanma")
+            }
         }
         // Startup: like G-Helper, set the saved mode and re-apply its profile.
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.startupApply() }
@@ -113,6 +118,7 @@ final class AppState: ObservableObject {
         pl1Now = client.readEC(ATKD.ecPL01).map { Int($0) }
         pl2Now = client.readEC(ATKD.ecPL02).map { Int($0) }
         fmae = client.readEC(ATKD.ecFMAE).map { $0 & 1 == 1 }
+        battery = client.readEC(ATKD.ecRSOC).flatMap { $0 <= 100 ? Int($0) : nil }
 
         let newMode = client.readEC(ATKD.ecFTBL).flatMap { Mode(rawValue: Int($0)) }
         if let nm = newMode {
@@ -288,6 +294,7 @@ final class AppState: ObservableObject {
 
     private func startupApply() {
         guard connected else { return }
+        reapplyChargeLimit(reason: "başlangıç")
         if let lm = store.lastMode, let m = Mode(rawValue: lm), m != mode {
             apply(mode: m, setMode: true, reason: "başlangıç")
         } else {
@@ -307,6 +314,39 @@ final class AppState: ObservableObject {
         if let a = p.biosPL1, let b = p.biosPL2 { p.pl1 = a; p.pl2 = b }
         updateProfile(m, p)
         apply(mode: m, setMode: true, reason: "varsayılana dönüldü")
+    }
+
+    // MARK: - battery charge limit (DEVS 0x00120057, like G-Helper / Linux charge_control_end_threshold)
+
+    /// Write and remember a charge limit. 100 = no limit (BIOS default).
+    func setChargeLimit(_ percent: Int) {
+        let v = min(max(percent, ATKD.chargeMin), ATKD.chargeMax)
+        store.chargeLimit = v
+        store.save()
+        writeChargeLimit(v, reason: "elle")
+    }
+
+    /// Stop managing the limit: write 100 % once so the battery charges fully again.
+    func clearChargeLimit() {
+        store.chargeLimit = nil
+        store.save()
+        writeChargeLimit(ATKD.chargeMax, reason: "kapatıldı")
+    }
+
+    func reapplyChargeLimit(reason: String) {
+        guard let v = store.chargeLimit else { return }
+        writeChargeLimit(v, reason: reason)
+    }
+
+    private func writeChargeLimit(_ v: Int, reason: String) {
+        guard connected else { return }
+        guard chargeSupported else { note("Şarj limiti: BIOS bu aygıtı bildirmiyor (DSTS 0x00120057)"); return }
+        guard writesEnabled else { note("Şarj limiti kaydedildi (%\(v)) ama yazma kapalı (-atkdro)"); return }
+        switch client.setChargeLimit(v) {
+        case .success: note("Şarj limiti: %\(v) (\(reason))")
+        case .failure(let e): note("Şarj limiti yazılamadı: \(e)")
+        }
+        info = client.info()
     }
 
     // MARK: - brightness (NullMoth IODisplay parameter, never below Brightness.minimum)

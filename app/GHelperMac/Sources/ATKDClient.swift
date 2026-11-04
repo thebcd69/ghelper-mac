@@ -6,7 +6,7 @@ import IOKit
 
 enum ATKD {
     static let serviceClass = "ASUSATKD"
-    static let abiVersion: UInt32 = 1
+    static let abiVersion: UInt32 = 2
 
     // selectors
     static let selGetInfo: UInt32 = 0
@@ -17,6 +17,7 @@ enum ATKD {
     static let selSetMode: UInt32 = 5
     static let selReadEC: UInt32 = 6
     static let selReadCurve: UInt32 = 7
+    static let selSetChargeLimit: UInt32 = 8
 
     // device ids (docs/RESEARCH.md)
     static let devCPUFan: UInt32 = 0x0011_0013
@@ -27,6 +28,9 @@ enum ATKD {
     static let devGPUFanFloor: UInt32 = 0x0011_0027
     static let devCPUTemp: UInt32 = 0x0012_0094
     static let devPerfMode: UInt32 = 0x0012_0075
+    static let devChargeLimit: UInt32 = 0x0012_0057
+    static let chargeMin = 40
+    static let chargeMax = 100
     static let unsupported: UInt32 = 0xFFFF_FFFE
     static let presentBit: UInt32 = 0x0001_0000
 
@@ -40,6 +44,7 @@ enum ATKD {
     static let ecFRS2: UInt64 = 6
     static let ecPL1V: UInt64 = 7
     static let ecPL2V: UInt64 = 8
+    static let ecRSOC: UInt64 = 9
 
     // info flags
     static let flagAttached: UInt32 = 1 << 0
@@ -50,6 +55,8 @@ enum ATKD {
     static let flagECFound: UInt32 = 1 << 5
     static let flagModeIdPresent: UInt32 = 1 << 6
     static let flagForceArg: UInt32 = 1 << 7
+    static let flagChargePresent: UInt32 = 1 << 8
+    static let flagERAMMapped: UInt32 = 1 << 9
 }
 
 struct ATKDInfo {
@@ -61,6 +68,7 @@ struct ATKDInfo {
     var writeCount: UInt32 = 0
     var lastBiosResult: UInt32 = 0
     var pl1Min: UInt32 = 0, pl1Max: UInt32 = 0, pl2Min: UInt32 = 0, pl2Max: UInt32 = 0
+    var chargeLimit: UInt32 = 0
 
     init(bytes: [UInt8]) {
         func u32(_ i: Int) -> UInt32 {
@@ -71,6 +79,7 @@ struct ATKDInfo {
         abiVersion = u32(0); flags = u32(1); dsdtOemRevision = u32(2); lastEvent = u32(3)
         eventCount = u32(4); writeCount = u32(5); lastBiosResult = u32(6)
         pl1Min = u32(7); pl1Max = u32(8); pl2Min = u32(9); pl2Max = u32(10)
+        chargeLimit = u32(11)
     }
 
     func has(_ f: UInt32) -> Bool { flags & f != 0 }
@@ -187,6 +196,11 @@ final class ATKDClient {
 
     func setMode(_ mode: Int) -> Result<UInt32, ATKDError> {
         call(ATKD.selSetMode, [UInt64(mode)], scalarOut: 1)
+            .map { UInt32(truncatingIfNeeded: $0.0.first ?? 0) }
+    }
+
+    func setChargeLimit(_ percent: Int) -> Result<UInt32, ATKDError> {
+        call(ATKD.selSetChargeLimit, [UInt64(percent)], scalarOut: 1)
             .map { UInt32(truncatingIfNeeded: $0.0.first ?? 0) }
     }
 }

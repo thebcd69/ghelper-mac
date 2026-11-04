@@ -18,6 +18,7 @@ const IOExternalMethodDispatch ASUSATKDUserClient::sMethods[kATKDSelCount] = {
 	{&ASUSATKDUserClient::sSetMode,     1, 0,                    1, 0},
 	{&ASUSATKDUserClient::sReadEC,      1, 0,                    1, 0},
 	{&ASUSATKDUserClient::sReadCurve,   1, 0,                    0, ATKD_FAN_CURVE_BYTES},
+	{&ASUSATKDUserClient::sSetChargeLimit, 1, 0,                 1, 0},
 };
 
 bool ASUSATKDUserClient::initWithTask(task_t owningTask, void *securityToken, UInt32 type, OSDictionary *properties) {
@@ -140,4 +141,16 @@ IOReturn ASUSATKDUserClient::sReadCurve(OSObject *target, void *, IOExternalMeth
 	if (!self || !a->structureOutput || a->structureOutputSize < ATKD_FAN_CURVE_BYTES || a->scalarInput[0] > 1)
 		return kIOReturnBadArgument;
 	return self->drv->readCurve(static_cast<uint32_t>(a->scalarInput[0]), static_cast<uint8_t *>(a->structureOutput));
+}
+
+IOReturn ASUSATKDUserClient::sSetChargeLimit(OSObject *target, void *, IOExternalMethodArguments *a) {
+	auto self = uc(target);
+	if (!self || a->scalarInput[0] > ATKD_CHARGE_MAX)
+		return kIOReturnBadArgument;
+	if (!self->mayWrite)
+		return kIOReturnNotPrivileged;
+	uint32_t ret = 0;
+	IOReturn r = self->drv->setChargeLimit(static_cast<uint32_t>(a->scalarInput[0]), &ret);
+	a->scalarOutput[0] = ret;
+	return r;
 }
