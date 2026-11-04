@@ -1,0 +1,62 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain info
+        run: |
+          xcodebuild -version
+          xcrun swiftc --version
+          xcrun clang --version
+
+      - name: Fetch MacKernelSDK
+        run: git clone --depth 1 https://github.com/acidanthera/MacKernelSDK.git "$RUNNER_TEMP/MacKernelSDK"
+
+      - name: Version
+        id: ver
+        run: |
+          SHORT=$(git rev-parse --short HEAD)
+          echo "version=0.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "tag=v0.0.${GITHUB_RUN_NUMBER}-${SHORT}" >> "$GITHUB_OUTPUT"
+
+      - name: Build kext
+        run: kext/ASUSATKD/build.sh "$RUNNER_TEMP/MacKernelSDK" build "${{ steps.ver.outputs.version }}"
+
+      - name: Build app
+        run: app/GHelperMac/build.sh build "${{ steps.ver.outputs.version }}"
+
+      - name: Package
+        run: |
+          mkdir -p dist/GHelperMac-${{ steps.ver.outputs.tag }}
+          D=dist/GHelperMac-${{ steps.ver.outputs.tag }}
+          ditto build/ASUSATKD.kext "$D/ASUSATKD.kext"
+          ditto build/GHelperMac.app "$D/GHelperMac.app"
+          cp docs/KURULUM.md LICENSE "$D/"
+          (cd dist && ditto -c -k --sequesterRsrc --keepParent "GHelperMac-${{ steps.ver.outputs.tag }}" "GHelperMac-${{ steps.ver.outputs.tag }}.zip")
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GHelperMac-${{ steps.ver.outputs.tag }}
+          path: dist/*.zip
+
+      - name: Prerelease
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.ver.outputs.tag }}" dist/*.zip \
+            --repo "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
+            --title "${{ steps.ver.outputs.tag }}" \
+            --notes "Otomatik derleme (commit $GITHUB_SHA). Kurulum ve ilk test: KURULUM.md. Yalnızca GU605MY (BIOS GU605MY.329) içindir."

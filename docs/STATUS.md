@@ -9,11 +9,15 @@ Last update: 2026-11-04 (session 1)
 - Kext sources `kext/ASUSATKD` (ASUSATKD.cpp/.hpp, ASUSATKDUserClient.cpp, ATKDShared.h ABI, Info.plist,
   kmod_info.c, build.sh). Passes clang -fsyntax-only against MacKernelSDK (not yet linked on CI).
 
+- App sources `app/GHelperMac` (ATKDClient/Model/AppState/Views/GHelperMacApp.swift, Info.plist, build.sh).
+- CI workflow `.github/workflows/build.yml`, docs/KURULUM.md, README.md.
+
 ## In progress
-- Menu-bar app `app/GHelperMac` (SwiftUI) + CI workflow.
+- First CI run (milestone commit). Swift never compiled locally (no toolchain) — fix CI errors.
 
 ## Exact next step
-- Write app sources, .github/workflows/build.yml, push milestone commit (no [skip ci]) and get CI green.
+- `gh api repos/thebcd69/ghelper-mac/actions/runs?per_page=5`; read failing job log via
+  `gh api repos/thebcd69/ghelper-mac/actions/jobs/<id>/logs`; fix; repeat until green.
 - Then: brightness research (coordinator request, lower priority) — see bottom.
 
 ## Risks / open points
