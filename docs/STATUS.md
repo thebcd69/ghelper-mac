@@ -23,6 +23,11 @@ Last update: 2026-11-04 (session 2)
   battery charge limit (DEVS 0x00120057, 40–100 %, runtime DSTS presence check, re-applied at launch/wake),
   ABI 2 (selector 8, flags ChargePresent/ERAMMapped, info.chargeLimit, EC field RSOC). See KURULUM §10–11.
 
+## DDC slider (branch `ddc-slider`, not merged into main)
+- `Sources/DDC.swift`: VCP 0x10 get/set through IOFBCopyI2CInterfaceForBus/IOI2CSendRequest; slider in the menu,
+  hidden unless a monitor answers. Needs a framebuffer with an I2C bus: thebcd69/nvidia-macos-driver `ddc-ci-claude`
+  (NVIDIA) or thebcd69/WTLIntelGfx `gu605-ddc` (Intel). KURULUM §12. Not run on hardware.
+
 ## Not verified (no hardware access)
 - Nothing has run on the real machine. First boot test per KURULUM §3 (read-only) is the next step.
 
