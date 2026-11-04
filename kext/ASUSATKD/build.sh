@@ -29,3 +29,7 @@ file "$KEXT/Contents/MacOS/ASUSATKD"
 otool -hv "$KEXT/Contents/MacOS/ASUSATKD" | tail -1
 echo "Undefined symbols (must all be kernel KPI exports):"
 nm -u "$KEXT/Contents/MacOS/ASUSATKD" | sed 's/^/  /'
+# Private/unsupported-for-3rd-party KPIs that once slipped in (xnu config/Private.exports): fail the build.
+if nm -u "$KEXT/Contents/MacOS/ASUSATKD" | grep -E '^_(strnstr|thread_call_cancel_wait|thread_call_allocate_with_priority|___cxa_atexit)$'; then
+  echo "error: private KPI referenced"; exit 1
+fi

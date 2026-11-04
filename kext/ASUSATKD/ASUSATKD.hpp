@@ -13,7 +13,8 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/acpi/IOACPIPlatformDevice.h>
-#include <kern/thread_call.h>
+#include <IOKit/IOWorkLoop.h>
+#include <IOKit/IOTimerEventSource.h>
 #include "ATKDShared.h"
 
 #define ATKDLOG(fmt, ...) IOLog("ATKD: " fmt "\n", ##__VA_ARGS__)
@@ -43,7 +44,8 @@ private:
 	IOACPIPlatformDevice *atkd;
 	IOACPIPlatformDevice *ec;      // \_SB.PC00.LPCB.EC0 if found (retained), else nullptr
 	IOLock               *lock;
-	thread_call_t         notifyCall;
+	IOWorkLoop           *workLoop;
+	IOTimerEventSource   *notifyTimer;  // defers _WED draining out of the ACPI notify context
 
 	bool     readOnlyArg;
 	bool     forceArg;
@@ -73,7 +75,7 @@ private:
 	IOReturn writeGateLocked(const char *what);
 	IOReturn validateCurveLocked(uint32_t fan, const uint8_t *c);
 
-	static void notifyThunk(thread_call_param_t p0, thread_call_param_t p1);
+	void        notifyFired(IOTimerEventSource *sender);
 	void        drainEvents();
 };
 

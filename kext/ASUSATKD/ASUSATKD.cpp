@@ -9,7 +9,6 @@
 #include "ASUSATKD.hpp"
 #include <IOKit/IOPlatformExpert.h>
 #include <libkern/libkern.h>
-#include <string.h>
 #include <kern/clock.h>
 #include <pexpert/pexpert.h>
 
@@ -40,6 +39,17 @@ static const char *const kGpuCurveNames[ATKD_FAN_CURVE_BYTES] = {
 static const uint64_t kRateWindowNs  = 10ULL * 1000ULL * 1000ULL * 1000ULL;
 static const uint32_t kRateMaxWrites = 24;
 
+static bool containsStr(const char *hay, size_t hayLen, const char *needle) {
+	size_t n = strlen(needle);
+	size_t h = strnlen(hay, hayLen);
+	if (n == 0 || n > h)
+		return n == 0;
+	for (size_t i = 0; i + n <= h; i++)
+		if (memcmp(hay + i, needle, n) == 0)
+			return true;
+	return false;
+}
+
 static bool bootArg(const char *name) {
 	char tmp[16];
 	return PE_parse_boot_argn(name, tmp, sizeof(tmp));
@@ -62,7 +72,8 @@ bool ASUSATKD::init(OSDictionary *dict) {
 	atkd = nullptr;
 	ec = nullptr;
 	lock = nullptr;
-	notifyCall = nullptr;
+	workLoop = nullptr;
+	notifyTimer = nullptr;
 	readOnlyArg = forceArg = dsdtMatch = signatureOK = writesEnabled = false;
 	cpuCurveActive = modeIdPresent = ecReadable = false;
 	dsdtOemRevision = 0;
@@ -112,8 +123,14 @@ bool ASUSATKD::start(IOService *provider) {
 	atkd->retain();
 
 	lock = IOLockAlloc();
-	notifyCall = thread_call_allocate(&ASUSATKD::notifyThunk, this);
-	if (!lock || !notifyCall) {
+	workLoop = IOWorkLoop::workLoop();
+	if (workLoop) {
+		notifyTimer = IOTimerEventSource::timerEventSource(
+			this, OSMemberFunctionCast(IOTimerEventSource::Action, this, &ASUSATKD::notifyFired));
+		if (notifyTimer && workLoop->addEventSource(notifyTimer) != kIOReturnSuccess)
+			OSSafeReleaseNULL(notifyTimer);
+	}
+	if (!lock || !workLoop || !notifyTimer) {
 		ATKDLOG("allocation failed");
 		stop(provider);
 		return false;
@@ -151,11 +168,13 @@ bool ASUSATKD::start(IOService *provider) {
 }
 
 void ASUSATKD::stop(IOService *provider) {
-	if (notifyCall) {
-		thread_call_cancel_wait(notifyCall);
-		thread_call_free(notifyCall);
-		notifyCall = nullptr;
+	if (notifyTimer) {
+		notifyTimer->cancelTimeout();
+		if (workLoop)
+			workLoop->removeEventSource(notifyTimer); // waits for an in-flight action (gated)
+		OSSafeReleaseNULL(notifyTimer);
 	}
+	OSSafeReleaseNULL(workLoop);
 	OSSafeReleaseNULL(ec);
 	OSSafeReleaseNULL(atkd);
 	ATKDLOG("stopped");
@@ -223,7 +242,7 @@ void ASUSATKD::findEC() {
 			continue;
 		char path[256];
 		int len = sizeof(path);
-		if (acpiPlane && dev->getPath(path, &len, acpiPlane) && strnstr(path, "/LPCB", sizeof(path)) && strnstr(path, "/EC0", sizeof(path))) {
+		if (acpiPlane && dev->getPath(path, &len, acpiPlane) && containsStr(path, sizeof(path), "/LPCB") && containsStr(path, sizeof(path), "/EC0")) {
 			ec = dev;
 			ec->retain();
 			ATKDLOG("EC found at %s", path);
@@ -592,15 +611,15 @@ IOReturn ASUSATKD::setMode(uint32_t mode, uint32_t *biosRet) {
 IOReturn ASUSATKD::message(UInt32 type, IOService *provider, void *argument) {
 	if (type == kIOACPIMessageDeviceNotification && provider == atkd) {
 		uint32_t code = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(argument));
-		if (code == 0xFF && notifyCall)
-			thread_call_enter(notifyCall);
+		if (code == 0xFF && notifyTimer)
+			notifyTimer->setTimeoutMS(1);
 		return kIOReturnSuccess;
 	}
 	return IOService::message(type, provider, argument);
 }
 
-void ASUSATKD::notifyThunk(thread_call_param_t p0, thread_call_param_t) {
-	static_cast<ASUSATKD *>(p0)->drainEvents();
+void ASUSATKD::notifyFired(IOTimerEventSource *) {
+	drainEvents();
 }
 
 void ASUSATKD::drainEvents() {
