@@ -9,12 +9,13 @@ VER="${3:-0.1.0}"
 OBJ="$OUT/obj"
 mkdir -p "$OBJ"
 CFLAGS=(-target x86_64-apple-macos10.12 -O2 -g -fno-builtin -fno-common -fno-stack-protector
-        -mkernel -fapple-kext -nostdinc -nostdinc++ -fno-rtti -fno-exceptions
+        -mkernel -fapple-kext -nostdinc
         -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT -D__MACH__
         -DATKD_VERSION="\"$VER\"" -I "$SDK/Headers" -Wall -Wextra -Wno-unused-parameter -Werror)
-xcrun clang++ "${CFLAGS[@]}" -std=gnu++17 -c "$HERE/ASUSATKD.cpp" -o "$OBJ/ASUSATKD.o"
-xcrun clang++ "${CFLAGS[@]}" -std=gnu++17 -c "$HERE/ASUSATKDUserClient.cpp" -o "$OBJ/ASUSATKDUserClient.o"
-xcrun clang   "${CFLAGS[@]}" -std=gnu11  -c "$HERE/kmod_info.c" -o "$OBJ/kmod_info.o"
+CXXFLAGS=(-nostdinc++ -fno-rtti -fno-exceptions)
+xcrun clang++ "${CFLAGS[@]}" "${CXXFLAGS[@]}" -std=gnu++17 -c "$HERE/ASUSATKD.cpp" -o "$OBJ/ASUSATKD.o"
+xcrun clang++ "${CFLAGS[@]}" "${CXXFLAGS[@]}" -std=gnu++17 -c "$HERE/ASUSATKDUserClient.cpp" -o "$OBJ/ASUSATKDUserClient.o"
+xcrun clang   "${CFLAGS[@]}" -Wno-unused-command-line-argument -std=gnu11  -c "$HERE/kmod_info.c" -o "$OBJ/kmod_info.o"
 KEXT="$OUT/ASUSATKD.kext"
 rm -rf "$KEXT"
 mkdir -p "$KEXT/Contents/MacOS"
