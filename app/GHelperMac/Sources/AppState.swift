@@ -32,6 +32,8 @@ final class AppState: ObservableObject {
     private var expectedMode: Mode?
     private var wakeObserver: NSObjectProtocol?
     var brightnessDragging = false
+    private var autoReapplies: [Date] = []
+    private var autoReapplyPaused = false
 
     var range: PowerRange { onAC ? .ac : .dc }
     var writesEnabled: Bool { info?.has(ATKD.flagWritesEnabled) ?? false }
@@ -128,7 +130,16 @@ final class AppState: ObservableObject {
         // BIOS dropped the custom curve (sleep, Fn key, EC reset) -> re-apply, at most every 30 s.
         if let m = mode, !busy, store.profile(m).customFans || store.profile(m).customPower,
            fmae == false, Date().timeIntervalSince(lastApply) > 30 {
-            reapplyCurrent(reason: "BIOS eğriyi sıfırladı")
+            autoReapplies = autoReapplies.filter { Date().timeIntervalSince($0) < 300 }
+            if autoReapplies.count < 3 {
+                autoReapplies.append(Date())
+                reapplyCurrent(reason: "BIOS eğriyi sıfırladı")
+            } else if !autoReapplyPaused {
+                autoReapplyPaused = true
+                note("FMAE sürekli 0 okunuyor — otomatik yeniden uygulama 5 dk durduruldu (log'u paylaşın)")
+            }
+        } else if fmae == true {
+            autoReapplyPaused = false
         }
     }
 

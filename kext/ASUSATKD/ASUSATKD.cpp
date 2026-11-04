@@ -98,8 +98,11 @@ IOService *ASUSATKD::probe(IOService *provider, SInt32 *score) {
 	OSObject *uid = nullptr;
 	bool isATK = false;
 	if (dev->evaluateObject("_UID", &uid) == kIOReturnSuccess && uid) {
-		auto s = OSDynamicCast(OSString, uid);
-		isATK = s && s->isEqualTo("ATK");
+		if (auto s = OSDynamicCast(OSString, uid))
+			isATK = s->isEqualTo("ATK");
+		else if (auto d = OSDynamicCast(OSData, uid)) // some ACPI platform versions return strings as data
+			isATK = d->getLength() >= 3 && memcmp(d->getBytesNoCopy(), "ATK", 3) == 0 &&
+			        (d->getLength() == 3 || static_cast<const char *>(d->getBytesNoCopy())[3] == 0);
 	}
 	OSSafeReleaseNULL(uid);
 	if (!isATK)
