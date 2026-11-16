@@ -1,5 +1,17 @@
 # STATUS
 
+## 2026-11-16: v0.0.6 — GPU mode switch (Eco / Standard / Ultimate)
+- Kext ABI 3: DSTS 0x00090020 / 0x00090016 readable, selector 9 arms a GPU mode, written by the
+  `IOPlatformHaltRestartAction` hook at restart/shutdown (docs/RESEARCH.md §12). App: segmented picker in the menu
+  panel, "Şimdi yeniden başlat…", two-restart handling for Ultimate → Eco, diagnostics line with `ghelper-gpu-last`.
+- Built locally on the Mac (`~/ghelper-mac-build`, CLT clang/swiftc + MacKernelSDK): kext 0.0.6 binary
+  `da3e0d34ac26274f…`, all 363 undefined symbols resolve against the 24.6.0 KPIs (`kmutil libraries --undef-symbols`).
+- App 0.0.6 installed in /Applications (0.0.5 kept in `~/ghelper-mac-build/backup-0.0.5-…`). With kext 0.0.5 it shows
+  "ASUSATKD.kext 0.0.6 gerekli".
+- **Not verified on hardware yet:** the kext on the EFI, the hook at restart, every transition of the table in §12.
+
+(The sections below are from 2026-11-04 and older than the installed state: 0.0.5 has been in daily use since.)
+
 Last update: 2026-11-04 (session 2)
 
 ## Done

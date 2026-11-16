@@ -5,6 +5,7 @@ import AppKit
 import Foundation
 import IOKit.ps
 import ServiceManagement
+import CoreServices
 
 final class AppState: ObservableObject {
     let client = ATKDClient()
@@ -39,6 +40,17 @@ final class AppState: ObservableObject {
     var range: PowerRange { onAC ? .ac : .dc }
     var writesEnabled: Bool { info?.has(ATKD.flagWritesEnabled) ?? false }
     var chargeSupported: Bool { info?.has(ATKD.flagChargePresent) ?? false }
+
+    // GPU mode (Eco / Standard / Ultimate): read from the BIOS, changed only by a restart
+    var gpuSupported: Bool { (info?.abiVersion ?? 0) >= 3 && (info?.has(ATKD.flagGpuPresent) ?? false) }
+    var gpuKextTooOld: Bool { connected && (info?.abiVersion ?? 0) < 3 }
+    var gpuMode: GpuMode? {
+        guard gpuSupported, let i = info else { return nil }
+        if i.gpuEcoRaw & 1 == 1 { return .eco }
+        return i.gpuMuxRaw & 1 == 1 ? .standard : .ultimate
+    }
+    var gpuPending: GpuMode? { info.flatMap { GpuMode(rawValue: Int($0.gpuTarget)) } }
+    var gpuPendingTwoStep: Bool { (info?.gpuPlan ?? 0) & ATKD.planTwoStep != 0 }
 
     var menuTitle: String {
         var s = cpuTemp.map { "\($0)°" } ?? "--°"
@@ -294,6 +306,7 @@ final class AppState: ObservableObject {
 
     private func startupApply() {
         guard connected else { return }
+        gpuStartup()
         reapplyChargeLimit(reason: "başlangıç")
         if let lm = store.lastMode, let m = Mode(rawValue: lm), m != mode {
             apply(mode: m, setMode: true, reason: "başlangıç")
@@ -347,6 +360,115 @@ final class AppState: ObservableObject {
         case .failure(let e): note("Şarj limiti yazılamadı: \(e)")
         }
         info = client.info()
+    }
+
+    // MARK: - GPU mode for the next boot (kext writes it at restart/shutdown; rules of Linux asus-wmi / g-helper-linux)
+
+    static func bootTime() -> Int {
+        var tv = timeval()
+        var len = MemoryLayout<timeval>.size
+        var mib: [Int32] = [CTL_KERN, KERN_BOOTTIME]
+        return sysctl(&mib, 2, &tv, &len, nil, 0) == 0 ? Int(tv.tv_sec) : 0
+    }
+
+    /// Outcome the kext left at the last restart (nvram ghelper-gpu-last), for the diagnostics pane.
+    static func lastGpuReport() -> String? {
+        let e = IORegistryEntryFromPath(kIOMainPortDefault, "IODeviceTree:/options")
+        guard e != 0 else { return nil }
+        defer { IOObjectRelease(e) }
+        guard let v = IORegistryEntryCreateCFProperty(e, "ghelper-gpu-last" as CFString, kCFAllocatorDefault, 0)?
+            .takeRetainedValue() else { return nil }
+        if let d = v as? Data { return String(data: d, encoding: .utf8) }
+        return v as? String
+    }
+
+    private func armGpu(_ m: GpuMode) -> UInt32? {
+        switch client.setGpuTarget(m.rawValue) {
+        case .success(let plan):
+            info = client.info()
+            return plan
+        case .failure(let e):
+            note("GPU modu ayarlanamadı: \(e)")
+            return nil
+        }
+    }
+
+    func selectGpuMode(_ m: GpuMode) {
+        guard connected, gpuSupported else { return }
+        guard writesEnabled else { note("Yazma kapalı (kext salt-okunur)"); return }
+        if m == gpuMode { cancelGpuTarget(); return }
+        guard let plan = armGpu(m) else { return }
+        store.gpuTarget = m.rawValue
+        store.gpuTargetBoot = Self.bootTime()
+        store.gpuTargetRestarts = 0
+        store.gpuTargetTwoStep = plan & ATKD.planTwoStep != 0
+        store.save()
+        if plan & ATKD.planTwoStep != 0 {
+            note("GPU: \(m.name) seçildi. Ultimate'ten Eco'ya iki yeniden başlatma gerekir: ilkinde Standart açılır, ikincisini uygulama kendisi hazırlar.")
+        } else {
+            note("GPU: yeniden başlatınca \(m.name) modunda açılacak.")
+        }
+    }
+
+    func cancelGpuTarget() {
+        if case .failure(let e) = client.setGpuTarget(0) { note("GPU bekleyen değişiklik silinemedi: \(e)") }
+        info = client.info()
+        if store.gpuTarget != nil {
+            store.gpuTarget = nil; store.gpuTargetBoot = nil; store.gpuTargetRestarts = nil; store.gpuTargetTwoStep = nil
+            store.save()
+            note("GPU: bekleyen mod değişikliği iptal edildi (\(gpuMode?.name ?? "?") kalıyor).")
+        }
+    }
+
+    /// After a boot: finished, one more restart needed (Ultimate -> Eco), or it did not take.
+    private func gpuStartup() {
+        guard gpuSupported, let raw = store.gpuTarget, let t = GpuMode(rawValue: raw) else { return }
+        func clear() {
+            store.gpuTarget = nil; store.gpuTargetBoot = nil; store.gpuTargetRestarts = nil; store.gpuTargetTwoStep = nil
+            store.save()
+        }
+        if gpuMode == t {
+            clear()
+            note("GPU modu: \(t.name) etkin.")
+            return
+        }
+        let boot = Self.bootTime()
+        if store.gpuTargetBoot == boot {            // same session (app restarted): keep the kext armed
+            if gpuPending != t { _ = armGpu(t) }
+            return
+        }
+        let n = (store.gpuTargetRestarts ?? 0) + 1
+        // Only the second half of Ultimate -> Eco is armed again by the app, once, and only when the first
+        // restart did land in Standard; anything else is reported and left to the user.
+        if store.gpuTargetTwoStep != true || n >= 2 || gpuMode != .standard || t != .eco {
+            clear()
+            note("GPU modu \(t.name) olmadı (şu an \(gpuMode?.name ?? "?")). Son kayıt: \(Self.lastGpuReport() ?? "yok")")
+            return
+        }
+        guard writesEnabled, armGpu(t) != nil else { return }
+        store.gpuTargetBoot = boot
+        store.gpuTargetRestarts = n
+        store.save()
+        note("GPU: şu an \(gpuMode?.name ?? "?"); \(t.name) için bir yeniden başlatma daha gerekiyor (hazırlandı).")
+    }
+
+    /// The standard macOS restart dialog (Apple event to loginwindow), so open documents are handled as usual.
+    func restartNow() {
+        var psn = ProcessSerialNumber(highLongOfPSN: 0, lowLongOfPSN: UInt32(kSystemProcess))
+        var target = AEAddressDesc()
+        var st = OSStatus(AECreateDesc(DescType(typeProcessSerialNumber), &psn, MemoryLayout<ProcessSerialNumber>.size, &target))
+        if st == noErr {
+            var ev = AppleEvent()
+            st = OSStatus(AECreateAppleEvent(AEEventClass(kCoreEventClass), AEEventID(0x7272_7374) /* 'rrst' kAEShowRestartDialog */,
+                                             &target, AEReturnID(kAutoGenerateReturnID), AETransactionID(kAnyTransactionID), &ev))
+            AEDisposeDesc(&target)
+            if st == noErr {
+                var reply = AppleEvent()
+                st = AESendMessage(&ev, &reply, AESendMode(kAENoReply), Int(kAEDefaultTimeout))
+                AEDisposeDesc(&ev)
+            }
+        }
+        if st != noErr { note("Yeniden başlatma penceresi açılamadı (\(st)) — Elma menüsünden yeniden başlatın.") }
     }
 
     // MARK: - brightness (NullMoth IODisplay parameter, never below Brightness.minimum)

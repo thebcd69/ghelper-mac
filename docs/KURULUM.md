@@ -173,3 +173,19 @@ v0.0.4'te `ATKD-ECReadable = No` çıktı: AppleACPIPlatform `evaluateInteger()`
 okuyamıyor. v0.0.5 DSDT eşleştiğinde ERAM (`0xFE108300`) ve ERM2 (`0xFE108B00`) pencerelerini **salt okunur**
 eşleyip alanları ofsetten okur (FTBL, PL01/PL02, FMAE, CTMP, FRMS/FRS2, RSOC, eğri baytları). Tanılama satırında
 `ERAM eşlendi · EC okunuyor` görünmeli; log: `ATKD: ERAM 0xfe108300 / ERM2 0xfe108b00 mapped read-only`.
+
+## 12. GPU modu (Eco / Standart / Ultimate) — 0.0.6
+
+Menü çubuğu panelindeki **GPU modu** anahtarı, makinenin bir sonraki açılışta hangi modda açılacağını seçer
+(Windows'taki G-Helper ile aynı BIOS ayarı). macOS çalışırken hiçbir şey değişmez: seçim, yeniden başlatma veya
+kapatma sırasında, en son anda yazılır.
+
+* Standart ↔ Eco, Standart ↔ Ultimate, Eco → Ultimate: tek yeniden başlatma.
+* Ultimate → Eco: iki yeniden başlatma (Windows'taki gibi önce Standart açılır; ikincisini uygulama kendisi hazırlar
+  ve bunu bildirir).
+* "Vazgeç" bekleyen değişikliği siler. Zorla kapatma (güç tuşu) veya çökme olursa değişiklik yazılmaz.
+* Eco'ya geçerken kapanış 6 saniyeye kadar uzayabilir (BIOS ekran kartını kapatırken bekliyor).
+* Sonuç bir sonraki açılışta "Ayarlar… → Tanılama" altında görünür (`son kapanış kaydı`); terminalde:
+  `nvram ghelper-gpu-last`.
+* Geri alma: Windows'ta G-Helper'dan mod seçmek her zaman çalışır. Kext'in önceki sürümü EFI'de
+  `EFI/OC/Kexts-backup/ASUSATKD.kext.before-0.0.6-…` klasöründe durur.

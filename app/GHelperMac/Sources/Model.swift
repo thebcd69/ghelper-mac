@@ -23,6 +23,19 @@ enum Mode: Int, CaseIterable, Codable, Identifiable {
     }
 }
 
+/// G-Helper GPU modes. Raw values = kext ATKDGpuTarget.
+enum GpuMode: Int, CaseIterable, Codable, Identifiable {
+    case eco = 1, standard = 2, ultimate = 3
+    var id: Int { rawValue }
+    var name: String {
+        switch self {
+        case .eco: return "Eco"
+        case .standard: return "Standart"
+        case .ultimate: return "Ultimate"
+        }
+    }
+}
+
 enum Fan: Int, CaseIterable, Identifiable {
     case cpu = 0, gpu = 1
     var id: Int { rawValue }
@@ -123,6 +136,13 @@ struct Store: Codable {
     var lastMode: Int?
     /// Battery charge end threshold in % (ATKD.chargeMin...100); nil = not managed by the app.
     var chargeLimit: Int?
+    /// GPU mode asked for (GpuMode raw), kept until the machine has booted in it; nil = nothing pending.
+    var gpuTarget: Int?
+    /// Boot time (seconds) of the session in which gpuTarget was last armed, and how many restarts it has taken so far.
+    var gpuTargetBoot: Int?
+    var gpuTargetRestarts: Int?
+    /// True when the target needs two restarts (Ultimate -> Eco): only then the app arms it again after a boot.
+    var gpuTargetTwoStep: Bool?
     var profiles: [String: ModeProfile] = [:]
 
     func profile(_ m: Mode) -> ModeProfile { profiles[String(m.rawValue)] ?? ModeProfile() }

@@ -106,6 +106,14 @@ bool ASUSATKD::init(OSDictionary *dict) {
 	eramMap = erm2Map = nullptr;
 	chargePresent = false;
 	chargeLimit = 0;
+	gpuPresent = false;
+	gpuEcoRaw = gpuMuxRaw = 0;
+	gpuTarget = kATKDGpuNone;
+	gpuPlan = 0;
+	haltLock = nullptr;
+	haltCall = nullptr;
+	haltDone = false;
+	haltReport[0] = 0;
 	readOnlyArg = forceArg = dsdtMatch = signatureOK = writesEnabled = false;
 	cpuCurveActive = modeIdPresent = ecReadable = false;
 	dsdtOemRevision = 0;
@@ -158,6 +166,8 @@ bool ASUSATKD::start(IOService *provider) {
 	atkd->retain();
 
 	lock = IOLockAlloc();
+	haltLock = IOLockAlloc();
+	haltCall = thread_call_allocate(&ASUSATKD::gpuApplyThunk, this);
 	workLoop = IOWorkLoop::workLoop();
 	if (workLoop) {
 		notifyTimer = IOTimerEventSource::timerEventSource(
@@ -165,7 +175,7 @@ bool ASUSATKD::start(IOService *provider) {
 		if (notifyTimer && workLoop->addEventSource(notifyTimer) != kIOReturnSuccess)
 			OSSafeReleaseNULL(notifyTimer);
 	}
-	if (!lock || !workLoop || !notifyTimer) {
+	if (!lock || !haltLock || !workLoop || !notifyTimer) {
 		ATKDLOG("allocation failed");
 		stop(provider);
 		return false;
@@ -195,6 +205,8 @@ bool ASUSATKD::start(IOService *provider) {
 	if (wmnbIntegerLocked(ATKD_METHOD_DSTS, cargs, &cv) == kIOReturnSuccess && cv != ATKD_UNSUPPORTED &&
 	    (cv & ATKD_PRESENT_BIT))
 		chargePresent = true;
+	uint32_t eco = 0, mux = 0;
+	gpuPresent = gpuReadLocked(&eco, &mux);
 	IOLockUnlock(lock);
 
 	ATKDLOG("attached to \\_SB.ATKD abi=%u dsdtMatch=%d (oemrev 0x%08x) signature=%d ec=%d (eram=%d) "
@@ -205,6 +217,15 @@ bool ASUSATKD::start(IOService *provider) {
 	setProperty("ATKD-WritesEnabled", writesEnabled);
 	setProperty("ATKD-DSDTMatch", dsdtMatch);
 	setProperty("ATKD-ECReadable", ecReadable);
+	ATKDLOG("GPU mode: present=%d eco 0x%08x mux 0x%08x -> %s", gpuPresent, gpuEcoRaw, gpuMuxRaw,
+	        !gpuPresent ? "unknown" : eco ? "Eco" : mux ? "Standard" : "Ultimate");
+	setProperty("ATKD-GpuEco", gpuEcoRaw, 32);
+	setProperty("ATKD-GpuMux", gpuMuxRaw, 32);
+	if (gpuPresent && writesEnabled && haltCall) {
+		// xnu reads this property in registerService() and then calls callPlatformFunction() with the same
+		// name at the end of every restart / shutdown, after all drivers were told (IOPlatformActions.cpp).
+		setProperty("IOPlatformHaltRestartAction", 100ULL, 32);
+	}
 	registerService();
 	return true;
 }
@@ -225,6 +246,10 @@ void ASUSATKD::stop(IOService *provider) {
 }
 
 void ASUSATKD::free() {
+	if (haltLock) {
+		IOLockFree(haltLock);
+		haltLock = nullptr;
+	}
 	if (lock) {
 		IOLockFree(lock);
 		lock = nullptr;
@@ -453,8 +478,13 @@ void ASUSATKD::getInfo(ATKDInfo *out) {
 	if (forceArg)       f |= kATKDFlagForceArg;
 	if (chargePresent)  f |= kATKDFlagChargePresent;
 	if (eramMap)        f |= kATKDFlagERAMMapped;
+	if (gpuPresent)     f |= kATKDFlagGpuPresent;
 	out->flags = f;
 	out->chargeLimit = chargeLimit;
+	out->gpuEcoRaw = gpuEcoRaw;
+	out->gpuMuxRaw = gpuMuxRaw;
+	out->gpuTarget = gpuTarget;
+	out->gpuPlan = gpuPlan;
 	out->dsdtOemRevision = dsdtOemRevision;
 	out->lastEvent = lastEvent;
 	out->eventCount = eventCount;
@@ -477,6 +507,8 @@ IOReturn ASUSATKD::dsts(uint32_t devId, uint32_t arg, uint32_t *out) {
 	case ATKD_DEV_PPT_PL2_SPPT:
 	case ATKD_DEV_PPT_FPPT:
 	case ATKD_DEV_CHARGE_LIMIT:
+	case ATKD_DEV_DGPU:
+	case ATKD_DEV_GPU_MUX:
 		break;
 	default:
 		return kIOReturnNotPermitted;
@@ -767,4 +799,171 @@ void ASUSATKD::drainEvents() {
 		eventCount++;
 	}
 	IOLockUnlock(lock);
+}
+
+// ---------------------------------------------------------------------------------------------
+// GPU mode for the next boot (Eco / Standard / Ultimate), docs/RESEARCH.md §12.
+//
+// Nothing is written while macOS runs: DEVS 0x00090020 = 1 makes the firmware power the dGPU off (Notify eject,
+// EC UFON -> RP12.POFF), which Linux forbids while a GPU driver is bound, and macOS has no hot-removal for it.
+// The app only arms a target; the writes happen in xnu's halt/restart action, the last step before the
+// platform reset, when no driver touches the GPU any more. The rules are those of Linux asus-wmi and
+// g-helper-linux: never dGPU off while the MUX is on the dGPU, never a MUX write while the dGPU is off,
+// and Ultimate -> Eco takes two boots (MUX first), as on Windows.
+// ---------------------------------------------------------------------------------------------
+
+bool ASUSATKD::gpuReadLocked(uint32_t *eco, uint32_t *mux) {
+	uint32_t a[5] = {ATKD_DEV_DGPU, 0, 0, 0, 0}, b[5] = {ATKD_DEV_GPU_MUX, 0, 0, 0, 0};
+	uint32_t ve = 0, vm = 0;
+	if (wmnbIntegerLocked(ATKD_METHOD_DSTS, a, &ve) != kIOReturnSuccess ||
+	    wmnbIntegerLocked(ATKD_METHOD_DSTS, b, &vm) != kIOReturnSuccess)
+		return false;
+	gpuEcoRaw = ve;
+	gpuMuxRaw = vm;
+	if (ve == ATKD_UNSUPPORTED || vm == ATKD_UNSUPPORTED || !(ve & ATKD_PRESENT_BIT) || !(vm & ATKD_PRESENT_BIT))
+		return false;
+	*eco = ve & 1u;
+	*mux = vm & 1u;
+	return true;
+}
+
+uint32_t ASUSATKD::gpuPlanFor(uint32_t target, uint32_t eco, uint32_t mux) {
+	switch (target) {
+	case kATKDGpuEco:
+		if (mux == 0)
+			return eco ? 0 : (kATKDPlanMuxHyb | kATKDPlanTwoStep);
+		return eco ? 0 : kATKDPlanEcoOn;
+	case kATKDGpuStandard:
+		if (mux == 0)
+			return eco ? kATKDPlanEcoOff : kATKDPlanMuxHyb;
+		return eco ? kATKDPlanEcoOff : 0;
+	case kATKDGpuUltimate:
+		if (mux == 0)
+			return eco ? kATKDPlanEcoOff : 0;
+		return (eco ? kATKDPlanEcoOff : 0) | kATKDPlanMuxDgpu;
+	default:
+		return 0;
+	}
+}
+
+IOReturn ASUSATKD::setGpuTarget(uint32_t target, uint32_t *plan) {
+	if (target > kATKDGpuUltimate)
+		return kIOReturnBadArgument;
+	IOLockLock(lock);
+	IOReturn r = writeGateLocked("GPU target");
+	uint32_t eco = 0, mux = 0;
+	if (r == kIOReturnSuccess && (!gpuPresent || !haltCall || !gpuReadLocked(&eco, &mux))) {
+		ATKDLOG("GPU target refused: DSTS 0x%08x / 0x%08x not present (0x%08x / 0x%08x)", ATKD_DEV_DGPU,
+		        ATKD_DEV_GPU_MUX, gpuEcoRaw, gpuMuxRaw);
+		r = kIOReturnUnsupported;
+	}
+	if (r == kIOReturnSuccess) {
+		uint32_t p = gpuPlanFor(target, eco, mux);
+		gpuTarget = p ? target : static_cast<uint32_t>(kATKDGpuNone);
+		gpuPlan = p;
+		*plan = p;
+		ATKDLOG("GPU target %u armed for the next restart/shutdown: now eco %u mux %u -> plan 0x%x%s", target, eco,
+		        mux, p, p ? "" : " (nothing to do)");
+	}
+	IOLockUnlock(lock);
+	return r;
+}
+
+uint32_t ASUSATKD::gpuDevsLocked(uint32_t devId, uint32_t value, const char *what) {
+	uint32_t args[5] = {devId, value, 0, 0, 0};
+	uint32_t ret = 0xDEAD;
+	uint64_t t0 = uptimeNs();
+	IOReturn r = wmnbIntegerLocked(ATKD_METHOD_DEVS, args, &ret);
+	uint32_t ms = static_cast<uint32_t>((uptimeNs() - t0) / 1000000ULL);
+	writeCount++;
+	lastBiosResult = ret;
+	ATKDLOG("halt: DEVS %s (0x%08x) = %u -> 0x%x (ior 0x%x, %u ms)", what, devId, value, ret, r, ms);
+	size_t n = strlen(haltReport);
+	snprintf(haltReport + n, sizeof(haltReport) - n, " %s=%u:0x%x/%ums", what, value, r == kIOReturnSuccess ? ret : 0xEEEE, ms);
+	return r == kIOReturnSuccess ? ret : 0xEEEE;
+}
+
+void ASUSATKD::gpuApplyThunk(thread_call_param_t p0, thread_call_param_t) {
+	static_cast<ASUSATKD *>(p0)->gpuApply();
+}
+
+// Runs on a thread_call thread, started by gpuHaltRestart(). The firmware's dGPU methods wait in AML (up to
+// 15 s off, 7.5 s on); the flags that count for the next boot are set in their first statements.
+void ASUSATKD::gpuApply() {
+	IOLockLock(lock);
+	uint32_t eco = 0, mux = 0;
+	bool ok = gpuReadLocked(&eco, &mux);
+	uint32_t plan = ok ? gpuPlanFor(gpuTarget, eco, mux) : 0;
+	snprintf(haltReport, sizeof(haltReport), "target=%u eco=%u mux=%u plan=0x%x", gpuTarget, eco, mux, plan);
+	if (plan & kATKDPlanEcoOff) {
+		gpuDevsLocked(ATKD_DEV_DGPU, 0, "dgpu");
+		if (!gpuReadLocked(&eco, &mux) || eco) {
+			ATKDLOG("halt: dGPU still off after DEVS, no MUX write");
+			plan &= ~(kATKDPlanMuxDgpu | kATKDPlanMuxHyb);
+		}
+	}
+	if ((plan & kATKDPlanMuxHyb) && !eco)
+		gpuDevsLocked(ATKD_DEV_GPU_MUX, 1, "mux");
+	if ((plan & kATKDPlanMuxDgpu) && !eco)
+		gpuDevsLocked(ATKD_DEV_GPU_MUX, 0, "mux");
+	if ((plan & kATKDPlanEcoOn) && mux == 1 && !(plan & (kATKDPlanMuxHyb | kATKDPlanMuxDgpu | kATKDPlanTwoStep)))
+		gpuDevsLocked(ATKD_DEV_DGPU, 1, "dgpu");
+	IOLockUnlock(lock);
+
+	IOLockLock(haltLock);
+	haltDone = true;
+	IOLockWakeup(haltLock, &haltDone, false);
+	IOLockUnlock(haltLock);
+}
+
+void ASUSATKD::gpuHaltRestart(unsigned int peType) {
+	// macOS also runs these actions for kPEPagingOff (hibernation): only a real restart or power-off counts.
+	if (peType != kPEHaltCPU && peType != kPERestartCPU && peType != kPEUPSDelayHaltCPU)
+		return;
+	if (gpuTarget == kATKDGpuNone || !gpuPlan || !writesEnabled || !haltCall || !haltLock)
+		return;
+	// xnu forces the reset 30 s after the shutdown began; stay well inside it. An AML wait that is still running
+	// when we return is cut by the reset, after it has set its flags.
+	uint32_t capMs = (gpuPlan & kATKDPlanEcoOff) ? 10000 : (gpuPlan & kATKDPlanEcoOn) ? 6000 : 4000;
+	ATKDLOG("halt: applying GPU target %u (plan 0x%x), waiting up to %u ms", gpuTarget, gpuPlan, capMs);
+	AbsoluteTime deadline;
+	clock_interval_to_deadline(capMs, kMillisecondScale, &deadline);
+	IOLockLock(haltLock);
+	haltDone = false;
+	thread_call_enter(haltCall);
+	while (!haltDone) {
+		if (IOLockSleepDeadline(haltLock, &haltDone, deadline, THREAD_UNINT) != THREAD_AWAKENED)
+			break;
+	}
+	bool done = haltDone;
+	IOLockUnlock(haltLock);
+	ATKDLOG("halt: %s%s", haltReport, done ? "" : " (still waiting in the firmware, going on)");
+
+	// Best effort: leave the outcome where the next boot can read it (nvram ghelper-gpu-last).
+	char rep[sizeof(haltReport) + 16];
+	snprintf(rep, sizeof(rep), "%s%s", haltReport, done ? " done" : " timeout");
+	if (IORegistryEntry *opts = IORegistryEntry::fromPath("IODeviceTree:/options")) {
+		const OSSymbol *k = OSSymbol::withCString("ghelper-gpu-last");
+		OSData *d = OSData::withBytes(rep, static_cast<unsigned int>(strlen(rep)));
+		if (k && d)
+			opts->setProperty(k, d);
+		OSSafeReleaseNULL(k);
+		OSSafeReleaseNULL(d);
+		const OSSymbol *sk = OSSymbol::withCString("IONVRAM-FORCESYNCNOW-PROPERTY");
+		const OSSymbol *sv = OSSymbol::withCString("ghelper-gpu-last");
+		if (sk && sv)
+			opts->setProperty(sk, const_cast<OSSymbol *>(sv));
+		OSSafeReleaseNULL(sk);
+		OSSafeReleaseNULL(sv);
+		opts->release();
+	}
+}
+
+IOReturn ASUSATKD::callPlatformFunction(const OSSymbol *functionName, bool waitForFunction,
+                                        void *param1, void *param2, void *param3, void *param4) {
+	if (functionName && functionName->isEqualTo("IOPlatformHaltRestartAction")) {
+		gpuHaltRestart(static_cast<unsigned int>(reinterpret_cast<uintptr_t>(param2)));
+		return kIOReturnSuccess;
+	}
+	return IOService::callPlatformFunction(functionName, waitForFunction, param1, param2, param3, param4);
 }

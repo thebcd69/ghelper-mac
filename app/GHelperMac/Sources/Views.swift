@@ -41,6 +41,39 @@ struct MenuPanel: View {
                     Text("Salt-okunur: kext yazmaya izin vermiyor (-atkdro / DSDT uyuşmazlığı).")
                         .font(.caption).foregroundColor(.orange)
                 }
+
+                Divider()
+                if state.gpuSupported {
+                    HStack {
+                        Text("GPU modu").font(.callout)
+                        Spacer()
+                        Text("şu an: \(state.gpuMode?.name ?? "?")").font(.callout).foregroundColor(.secondary)
+                    }
+                    Picker("GPU modu", selection: Binding(
+                        get: { state.gpuPending ?? state.gpuMode ?? .standard },
+                        set: { state.selectGpuMode($0) })) {
+                        ForEach(GpuMode.allCases) { m in Text(m.name).tag(m) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .disabled(!state.writesEnabled)
+                    if let p = state.gpuPending {
+                        Text(state.gpuPendingTwoStep
+                             ? "Yeniden başlatınca önce Standart açılır; \(p.name) için ikinci bir yeniden başlatma gerekir."
+                             : "Yeniden başlatınca (veya kapatıp açınca) \(p.name) modunda açılır.")
+                            .font(.caption).foregroundColor(.orange)
+                        HStack {
+                            Button("Şimdi yeniden başlat…") { state.restartNow() }
+                            Button("Vazgeç") { state.cancelGpuTarget() }
+                        }
+                    } else {
+                        Text("Mod yeniden başlatınca değişir; macOS çalışırken ekran kartı açılıp kapatılmaz.")
+                            .font(.caption).foregroundColor(.secondary)
+                    }
+                } else if state.gpuKextTooOld {
+                    Text("GPU modu anahtarı için ASUSATKD.kext 0.0.6 gerekli (EFI'de eski sürüm var).")
+                        .font(.caption).foregroundColor(.secondary)
+                }
             }
             Divider()
             if let b = state.brightness {
@@ -234,6 +267,11 @@ struct EditorView: View {
                                 .font(.caption.monospaced())
                             Text("yazma \(i.has(ATKD.flagWritesEnabled) ? "açık" : "kapalı") · DSDT \(i.has(ATKD.flagDSDTMatch) ? "eşleşti" : "eşleşmedi") · EC \(i.has(ATKD.flagECFound) ? "okunuyor" : "yok") · mod-ID \(i.has(ATKD.flagModeIdPresent) ? "var" : "yok") · ERAM \(i.has(ATKD.flagERAMMapped) ? "eşlendi" : "yok") · şarj \(i.has(ATKD.flagChargePresent) ? "var" : "yok")\(i.chargeLimit > 0 ? " (%\(i.chargeLimit))" : "")")
                                 .font(.caption)
+                        }
+                        if state.gpuSupported, let i = state.info {
+                            Text(String(format: "GPU: eco 0x%08X, mux 0x%08X, bekleyen %u (plan 0x%X) · son kapanış kaydı: %@",
+                                        i.gpuEcoRaw, i.gpuMuxRaw, i.gpuTarget, i.gpuPlan, AppState.lastGpuReport() ?? "yok"))
+                                .font(.caption.monospaced())
                         }
                         ForEach(Array(state.log.suffix(60).enumerated()), id: \.offset) { _, line in
                             Text(line).font(.caption.monospaced())

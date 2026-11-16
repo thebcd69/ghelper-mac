@@ -191,3 +191,44 @@ main `docs/NVRMFB-BACKLIGHT-POWER.md`, `CHANGELOG.md` (2.0.3, 2.3.2, 2.6.3); Lin
 * G-Helper `app/AsusACPI.cs`, `app/Mode/ModeControl.cs`, `app/AppConfig.cs` (seerge/g-helper main, fetched 2026-11-04).
 * Linux master `drivers/platform/x86/asus-wmi.c`, `asus-armoury.c`, `asus-armoury.h`,
   `include/linux/platform_data/x86/asus-wmi.h` (fetched 2026-11-04).
+
+## 12. GPU mode (Eco / Standard / Ultimate) — added 2026-11-16
+
+Sources: GU605MY.329 DSDT (line numbers of `iasl -d` 20230628), Linux `asus-wmi` (`dgpu_disable`, `gpu_mux_mode`),
+`utajum/g-helper-linux` (`src/Gpu/GPUModeControl.cs`, `MuxLatch.cs`, `Platform/Linux/Asus/LinuxAsusWmi.cs`).
+
+| ID | Read (DSTS) | Write (DEVS) |
+|---|---|---|
+| 0x00090020 dGPU disable ("Eco") | L78323: `0x00010000 \| CUMA` (CUMA 1 = dGPU off) | **in AML, L78863** (below) |
+| 0x00090016 GPU MUX | L78339: `Return (DGPM)`; bit 0: 1 = hybrid, 0 = dGPU drives the panel | not in AML → `WCHK` → SMI (`W15H`); latched, read-back stays old until the next boot |
+
+DEVS 0x00090020 = 1: `CUMA = 1; WOSR = 1; GPCE = 1; EC0.UMAF = 1; EC0.PWMD = 0; Notify (RP12.PXSX, 0x81);
+Notify (RP12.PXSX, 3 /* eject */); WAT1 ()` — WAT1 waits up to 15 s (150 × 100 ms) for `WOSR == 0`, which EC query
+`_Q3F` clears after `RP12.DL23 (); RP12.POFF ()` once the EC raised `UFON` (L76445). So the firmware really cuts the
+dGPU's power, live. The flag the BIOS reads at the next POST is EC `UMAF`, set in the first statements.
+
+DEVS 0x00090020 = 0: `EC0.UMAF = 0; EC0.PWMD = 1; UMFG = 0; Notify (PXSX, 0); EC0.FGA9 = 1; WAT2 ()` — WAT2 waits up
+to 7.5 s (500 × 15 ms) for the device to answer on the bus.
+
+Rules taken over from Linux / g-helper-linux (and the owner's Windows experience):
+* never dGPU off while a GPU driver is bound (kernel panic on Linux; macOS has no hot-removal either) → **nothing is
+  written while macOS runs**;
+* never dGPU off while the MUX is on the dGPU (no display at boot, CMOS reset needed);
+* the firmware rejects MUX writes while the dGPU is off → Eco → Ultimate = dGPU on first, then MUX;
+* Ultimate → Eco takes two boots (first boot is Standard), on Windows too.
+
+Implementation (`ASUSATKD.cpp`, "GPU mode for the next boot"): selector 9 only arms a target. The kext sets the
+property `IOPlatformHaltRestartAction`; xnu (`iokit/Kernel/IOPlatformActions.cpp`, `IOPMrootDomain::
+handlePlatformHaltRestart`) then calls `callPlatformFunction("IOPlatformHaltRestartAction", …, pe_type)` after all
+drivers got their shutdown notification, right before the platform reset. Only `kPEHaltCPU` / `kPERestartCPU` count
+(macOS also runs the actions for `kPEPagingOff`). The DEVS calls run on a `thread_call`; the hook waits 4–10 s
+(xnu forces the reset 30 s after the shutdown began) and leaves the outcome in NVRAM `ghelper-gpu-last`.
+
+| now → target | written at restart | boots as |
+|---|---|---|
+| Standard → Eco | dGPU off | Eco |
+| Eco → Standard | dGPU on | Standard |
+| Standard → Ultimate | MUX = 0 | Ultimate |
+| Eco → Ultimate | dGPU on, then MUX = 0 | Ultimate |
+| Ultimate → Standard | MUX = 1 | Standard |
+| Ultimate → Eco | MUX = 1 (first restart: Standard), app arms dGPU off (second restart) | Eco after two |

@@ -11,7 +11,7 @@
 
 #include <stdint.h>
 
-#define ATKD_ABI_VERSION        2u
+#define ATKD_ABI_VERSION        3u
 #define ATKD_SERVICE_CLASS      "ASUSATKD"
 
 // ---- IOUserClient selectors ----
@@ -25,6 +25,8 @@ enum {
 	kATKDSelReadEC          = 6, // in: scalar[0]=ATKDECField ; out: scalar[0]=value
 	kATKDSelReadCurve       = 7, // in: scalar[0]=fan (0 CPU,1 GPU) ; out: struct 16 bytes (current EC curve)
 	kATKDSelSetChargeLimit  = 8, // in: scalar[0]=percent (ATKD_CHARGE_MIN..100) ; out: scalar[0]=BIOS ret
+	kATKDSelSetGpuTarget    = 9, // in: scalar[0]=ATKDGpuTarget ; out: scalar[0]=plan bits (ABI 3). Nothing is written
+	                             // to the BIOS here: the plan runs when macOS restarts or shuts down.
 	kATKDSelCount
 };
 
@@ -36,6 +38,18 @@ enum { kATKDLimitPL1 = 0, kATKDLimitPL2 = 1 };
 
 // ---- Modes (ASUS throttle thermal policy / EC FTBL) ----
 enum { kATKDModeBalanced = 0, kATKDModeTurbo = 1, kATKDModeSilent = 2 };
+
+// ---- GPU mode for the next boot (ABI 3). G-Helper names: Eco = dGPU off, Standard = hybrid, Ultimate = dGPU drives the panel.
+enum { kATKDGpuNone = 0, kATKDGpuEco = 1, kATKDGpuStandard = 2, kATKDGpuUltimate = 3 };
+
+// Plan bits: what the restart/shutdown hook will write for the armed target, given the state read at arming time.
+enum {
+	kATKDPlanEcoOn   = 1u << 0, // DEVS 0x00090020 = 1
+	kATKDPlanEcoOff  = 1u << 1, // DEVS 0x00090020 = 0
+	kATKDPlanMuxHyb  = 1u << 2, // DEVS 0x00090016 = 1 (hybrid; takes effect at the next boot)
+	kATKDPlanMuxDgpu = 1u << 3, // DEVS 0x00090016 = 0 (dGPU; takes effect at the next boot)
+	kATKDPlanTwoStep = 1u << 4, // Ultimate -> Eco: this restart only moves the MUX (boots Standard); Eco needs one more
+};
 
 // ---- Read-only EC RAM fields (\_SB.PC00.LPCB.EC0.*), memory-mapped on this BIOS ----
 enum {
@@ -67,6 +81,8 @@ enum {
 #define ATKD_DEV_PPT_PL1_SPL    0x001200A3u
 #define ATKD_DEV_PPT_FPPT       0x001200C1u // DSTS present, DEVS unsupported -> read only
 #define ATKD_DEV_CHARGE_LIMIT   0x00120057u // RSOC charge end threshold; not in AML -> SMI (WCHK), runtime presence check
+#define ATKD_DEV_DGPU           0x00090020u // DSTS: 0x10000 | CUMA (1 = dGPU off, "Eco"); DEVS in AML (DSDT L78863)
+#define ATKD_DEV_GPU_MUX        0x00090016u // DSTS: DGPM, bit 0: 1 = hybrid, 0 = dGPU; DEVS not in AML -> SMI (WCHK), latched for the next boot
 #define ATKD_UNSUPPORTED        0xFFFFFFFEu
 #define ATKD_PRESENT_BIT        0x00010000u
 
@@ -93,6 +109,7 @@ enum {
 	kATKDFlagForceArg       = 1u << 7, // -atkdforce
 	kATKDFlagChargePresent  = 1u << 8, // DSTS 0x00120057 has presence bit (ABI 2)
 	kATKDFlagERAMMapped     = 1u << 9, // EC fields read from the mapped ERAM/ERM2 window (ABI 2)
+	kATKDFlagGpuPresent     = 1u << 10, // DSTS 0x00090020 and 0x00090016 both have the presence bit (ABI 3)
 };
 
 typedef struct {
@@ -105,7 +122,10 @@ typedef struct {
 	uint32_t lastBiosResult;
 	uint32_t pl1MinW, pl1MaxW, pl2MinW, pl2MaxW;
 	uint32_t chargeLimit;    // last charge limit written by the kext since boot, 0 = none (ABI 2)
-	uint32_t reserved[4];
+	uint32_t gpuEcoRaw;      // DSTS 0x00090020 as read at start (ABI 3)
+	uint32_t gpuMuxRaw;      // DSTS 0x00090016 as read at start (ABI 3)
+	uint32_t gpuTarget;      // armed ATKDGpuTarget, 0 = none (ABI 3)
+	uint32_t gpuPlan;        // plan bits of the armed target (ABI 3)
 } ATKDInfo; // 64 bytes
 
 #endif /* ATKDShared_h */

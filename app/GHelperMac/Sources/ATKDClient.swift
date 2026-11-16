@@ -6,7 +6,7 @@ import IOKit
 
 enum ATKD {
     static let serviceClass = "ASUSATKD"
-    static let abiVersion: UInt32 = 2
+    static let abiVersion: UInt32 = 3
 
     // selectors
     static let selGetInfo: UInt32 = 0
@@ -18,6 +18,14 @@ enum ATKD {
     static let selReadEC: UInt32 = 6
     static let selReadCurve: UInt32 = 7
     static let selSetChargeLimit: UInt32 = 8
+    static let selSetGpuTarget: UInt32 = 9   // ABI 3: arms a GPU mode for the next restart/shutdown
+
+    // plan bits returned by selSetGpuTarget (ATKDShared.h)
+    static let planEcoOn: UInt32 = 1 << 0
+    static let planEcoOff: UInt32 = 1 << 1
+    static let planMuxHyb: UInt32 = 1 << 2
+    static let planMuxDgpu: UInt32 = 1 << 3
+    static let planTwoStep: UInt32 = 1 << 4
 
     // device ids (docs/RESEARCH.md)
     static let devCPUFan: UInt32 = 0x0011_0013
@@ -57,6 +65,7 @@ enum ATKD {
     static let flagForceArg: UInt32 = 1 << 7
     static let flagChargePresent: UInt32 = 1 << 8
     static let flagERAMMapped: UInt32 = 1 << 9
+    static let flagGpuPresent: UInt32 = 1 << 10
 }
 
 struct ATKDInfo {
@@ -69,6 +78,7 @@ struct ATKDInfo {
     var lastBiosResult: UInt32 = 0
     var pl1Min: UInt32 = 0, pl1Max: UInt32 = 0, pl2Min: UInt32 = 0, pl2Max: UInt32 = 0
     var chargeLimit: UInt32 = 0
+    var gpuEcoRaw: UInt32 = 0, gpuMuxRaw: UInt32 = 0, gpuTarget: UInt32 = 0, gpuPlan: UInt32 = 0
 
     init(bytes: [UInt8]) {
         func u32(_ i: Int) -> UInt32 {
@@ -80,6 +90,7 @@ struct ATKDInfo {
         eventCount = u32(4); writeCount = u32(5); lastBiosResult = u32(6)
         pl1Min = u32(7); pl1Max = u32(8); pl2Min = u32(9); pl2Max = u32(10)
         chargeLimit = u32(11)
+        gpuEcoRaw = u32(12); gpuMuxRaw = u32(13); gpuTarget = u32(14); gpuPlan = u32(15)
     }
 
     func has(_ f: UInt32) -> Bool { flags & f != 0 }
@@ -201,6 +212,12 @@ final class ATKDClient {
 
     func setChargeLimit(_ percent: Int) -> Result<UInt32, ATKDError> {
         call(ATKD.selSetChargeLimit, [UInt64(percent)], scalarOut: 1)
+            .map { UInt32(truncatingIfNeeded: $0.0.first ?? 0) }
+    }
+
+    /// Arm (1 Eco, 2 Standard, 3 Ultimate) or clear (0) the GPU mode the kext writes at restart/shutdown. Returns the plan bits.
+    func setGpuTarget(_ target: Int) -> Result<UInt32, ATKDError> {
+        call(ATKD.selSetGpuTarget, [UInt64(target)], scalarOut: 1)
             .map { UInt32(truncatingIfNeeded: $0.0.first ?? 0) }
     }
 }

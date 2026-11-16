@@ -16,6 +16,7 @@
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOMemoryDescriptor.h>
+#include <kern/thread_call.h>
 #include "ATKDShared.h"
 
 #define ATKDLOG(fmt, ...) IOLog("ATKD: " fmt "\n", ##__VA_ARGS__)
@@ -41,6 +42,12 @@ public:
 	IOReturn readEC(uint32_t field, uint32_t *out);
 	IOReturn readCurve(uint32_t fan, uint8_t *out16);
 	IOReturn setChargeLimit(uint32_t percent, uint32_t *biosRet);
+	IOReturn setGpuTarget(uint32_t target, uint32_t *plan);
+
+	// IOPlatformHaltRestartAction: called by xnu at the very end of a restart / shutdown (see gpumode.inc)
+	using IOService::callPlatformFunction;
+	IOReturn callPlatformFunction(const OSSymbol *functionName, bool waitForFunction,
+	                              void *param1, void *param2, void *param3, void *param4) APPLE_KEXT_OVERRIDE;
 
 private:
 	IOACPIPlatformDevice *atkd;
@@ -66,6 +73,22 @@ private:
 	uint32_t eventCount;
 	uint32_t writeCount;
 	uint32_t lastBiosResult;
+
+	// GPU mode for the next boot
+	bool          gpuPresent;
+	uint32_t      gpuEcoRaw, gpuMuxRaw;
+	uint32_t      gpuTarget, gpuPlan;
+	IOLock       *haltLock;
+	thread_call_t haltCall;
+	bool          haltDone;
+	char          haltReport[160];
+
+	bool     gpuReadLocked(uint32_t *eco, uint32_t *mux);
+	uint32_t gpuPlanFor(uint32_t target, uint32_t eco, uint32_t mux);
+	uint32_t gpuDevsLocked(uint32_t devId, uint32_t value, const char *what);
+	void     gpuApply();
+	static void gpuApplyThunk(thread_call_param_t p0, thread_call_param_t p1);
+	void     gpuHaltRestart(unsigned int peType);
 
 	uint64_t rateWindowStartNs;
 	uint32_t rateWindowWrites;
@@ -115,6 +138,7 @@ private:
 	static IOReturn sReadEC(OSObject *target, void *ref, IOExternalMethodArguments *a);
 	static IOReturn sReadCurve(OSObject *target, void *ref, IOExternalMethodArguments *a);
 	static IOReturn sSetChargeLimit(OSObject *target, void *ref, IOExternalMethodArguments *a);
+	static IOReturn sSetGpuTarget(OSObject *target, void *ref, IOExternalMethodArguments *a);
 };
 
 #endif /* ASUSATKD_hpp */
