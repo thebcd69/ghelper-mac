@@ -382,6 +382,15 @@ final class AppState: ObservableObject {
         return v as? String
     }
 
+    /// Flag for the boot runner (gu605-auto.sh, root, before login): in the Standard boot between Ultimate and Eco it
+    /// arms Eco and restarts by itself, because that boot has no usable picture yet. Empty file = nothing pending.
+    static let gpuNextURL = URL(fileURLWithPath: "/Users/Shared/GHelperMac/gpu-next")
+    private func writeGpuNext(_ s: String) {
+        let u = Self.gpuNextURL
+        try? FileManager.default.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? s.data(using: .utf8)?.write(to: u, options: .atomic)
+    }
+
     private func armGpu(_ m: GpuMode) -> UInt32? {
         switch client.setGpuTarget(m.rawValue) {
         case .success(let plan):
@@ -403,8 +412,9 @@ final class AppState: ObservableObject {
         store.gpuTargetRestarts = 0
         store.gpuTargetTwoStep = plan & ATKD.planTwoStep != 0
         store.save()
+        writeGpuNext(plan & ATKD.planTwoStep != 0 ? "eco \(Int(Date().timeIntervalSince1970))\n" : "")
         if plan & ATKD.planTwoStep != 0 {
-            note("GPU: \(m.name) seçildi. Ultimate'ten Eco'ya iki yeniden başlatma gerekir: ilkinde Standart açılır, ikincisini uygulama kendisi hazırlar.")
+            note("GPU: \(m.name) seçildi. Ultimate'ten Eco'ya iki yeniden başlatma gerekir: ilkinde Standart açılır ve makine giriş ekranında kendiliğinden bir kez daha yeniden başlar.")
         } else {
             note("GPU: yeniden başlatınca \(m.name) modunda açılacak.")
         }
@@ -412,6 +422,7 @@ final class AppState: ObservableObject {
 
     func cancelGpuTarget() {
         if case .failure(let e) = client.setGpuTarget(0) { note("GPU bekleyen değişiklik silinemedi: \(e)") }
+        writeGpuNext("")
         info = client.info()
         if store.gpuTarget != nil {
             store.gpuTarget = nil; store.gpuTargetBoot = nil; store.gpuTargetRestarts = nil; store.gpuTargetTwoStep = nil

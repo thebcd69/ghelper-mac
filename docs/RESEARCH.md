@@ -232,3 +232,8 @@ drivers got their shutdown notification, right before the platform reset. Only `
 | Eco → Ultimate | dGPU on, then MUX = 0 | Ultimate |
 | Ultimate → Standard | MUX = 1 | Standard |
 | Ultimate → Eco | MUX = 1 (first restart: Standard), app arms dGPU off (second restart) | Eco after two |
+
+The Standard boot between Ultimate and Eco needs nobody at the keyboard: the app leaves `eco <epoch>` in
+`/Users/Shared/GHelperMac/gpu-next`; the GU605 boot runner (`gu605-auto.sh`, root, WTLIntelGfx branch `gu605-mac`)
+finds it in a Standard boot, arms Eco through `tools/ghelperctl gpu eco` and runs `shutdown -r now`, once (the flag
+is moved into the run's log folder first; `gu605.conf` `GPU_NEXT=0` switches this off).

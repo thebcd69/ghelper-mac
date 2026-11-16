@@ -59,7 +59,7 @@ struct MenuPanel: View {
                     .disabled(!state.writesEnabled)
                     if let p = state.gpuPending {
                         Text(state.gpuPendingTwoStep
-                             ? "Yeniden başlatınca önce Standart açılır; \(p.name) için ikinci bir yeniden başlatma gerekir."
+                             ? "Yeniden başlatınca önce Standart açılır, makine kendiliğinden bir kez daha yeniden başlar ve \(p.name) açılır."
                              : "Yeniden başlatınca (veya kapatıp açınca) \(p.name) modunda açılır.")
                             .font(.caption).foregroundColor(.orange)
                         HStack {
