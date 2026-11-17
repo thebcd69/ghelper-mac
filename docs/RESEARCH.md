@@ -255,5 +255,23 @@ Measured (powermetrics): one thread 4.99 GHz; six cores 4.55 GHz at the 35 W lim
 9.7 W). BCD probe (hiz-olcumu.sh): single core 1.90 -> 1.10 s, 12 cores 5.17 -> 2.79 s, 3 at once 2.50 -> 1.54 s;
 3000 process starts 10.4 -> 8.9 s (not clock-bound).
 
-Install: kext in /Library/Extensions + auxiliary collection; tools/gu605cpu/ LaunchDaemon + script apply it at boot
-(gu605.conf `CPU_HWP=0` turns it off).
+~~Install: kext in /Library/Extensions + auxiliary collection; tools/gu605cpu/ LaunchDaemon + script apply it at boot.~~
+
+**Withdrawn the same day (12:09 panic).** Re-applying meant `mp_rendezvous_no_intrs` twice a second, which stops every
+CPU at once. One CPU was spinning with interrupts off in XeGfx (`intel_guc_ct_send`) and could not join in time:
+`mp_rv_action() entry: 11 of 12 responses`. The per-CPU queued call (`mp_cpus_call` NOSYNC) would avoid that but is a
+Private export. GU605CPU 0.2 is read only (dump on demand), the LaunchDaemon is disabled
+(`/Library/XeGfx/gu605/com.thebcd69.gu605cpu.plist.disabled`).
+
+### The fix in the kernel instead (OpenCore Kernel->Patch, macOS 15.8.1 / Darwin 24.6.0 only)
+
+XCPM's HWP request builder (unnamed function at kernel vmaddr 0xffffff800046a250, `edi` = its P-state) assembles
+`min | max<<8 | desired<<16 | EPP<<24` and writes 0x774 (or 0x772). Two patches, each found once in the kernel:
+
+| what | find | replace |
+|---|---|---|
+| shared request: desired 0, max 0x40 | `89f0 c1e310 0fb6f0 c1e618 4889d0 48c1e008` | `89f0 31db90 0fb6f0 c1e618 b800400000 6690` |
+| per-CPU request: desired 0 | `478b8418c0000000 41c1e110 41c1e018` | `478b8418c0000000 4531c990 41c1e018` |
+
+min (4) and EPP (XCPM's, 0x80) are left as they are: idle stays low, the hardware picks the clock under load
+(the same as Windows' balanced plan). No periodic work, no cross-CPU calls. tools/opencore/ocpatch-xcpm.py adds them.
