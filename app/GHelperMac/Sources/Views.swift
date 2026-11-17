@@ -16,8 +16,10 @@ struct MenuPanel: View {
                 Text("ASUSATKD kext bulunamadı.\nKURULUM.md adımlarını kontrol edin.")
                     .foregroundColor(.red).font(.callout)
             } else {
+                PowerSection().environmentObject(state)
+                Divider()
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 3) {
-                    GridRow { Text("CPU sıcaklık"); Text(state.cpuTemp.map { "\($0) °C" } ?? "?") }
+                    GridRow { Text("CPU sıcaklık (EC)"); Text(state.cpuTemp.map { "\($0) °C" } ?? "?") }
                     GridRow { Text("CPU fan"); Text(state.cpuRPM.map { "\($0) RPM" } ?? "?") }
                     GridRow { Text("GPU fan"); Text(state.gpuRPM.map { "\($0) RPM" } ?? "?") }
                     GridRow { Text("PL1 / PL2 (EC)"); Text("\(state.pl1Now.map(String.init) ?? "?") / \(state.pl2Now.map(String.init) ?? "?") W") }
@@ -103,7 +105,64 @@ struct MenuPanel: View {
             }
         }
         .padding(12)
-        .frame(width: 320)
+        .frame(width: 340)
+        .onAppear { state.panelVisible = true }
+        .onDisappear { state.panelVisible = false }
+    }
+}
+
+/// Live power: battery, CPU (RAPL), dGPU link, battery health, busiest processes.
+struct PowerSection: View {
+    @EnvironmentObject var state: AppState
+
+    private func w(_ v: Double?) -> String { v.map { String(format: "%.1f W", $0) } ?? "?" }
+    private func hm(_ m: Int?) -> String? { m.map { String(format: "%d sa %02d dk", $0 / 60, $0 % 60) } }
+
+    var body: some View {
+        let b = state.batt
+        let p = state.cpuPower
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 3) {
+            GridRow {
+                Text(state.onAC ? "Pile giren" : "Pilden çekilen").bold()
+                if let bw = b.watts {
+                    Text(state.onAC ? (bw < -0.05 ? w(-bw) : "0 W (şarj olmuyor)") : w(bw)).bold().monospacedDigit()
+                } else { Text("?") }
+            }
+            if !state.onAC, let t = hm(b.minutesToEmpty) { GridRow { Text("Kalan süre"); Text(t) } }
+            if state.onAC, b.charging, let t = hm(b.minutesToFull) { GridRow { Text("Dolmasına"); Text(t) } }
+            GridRow {
+                Text("CPU paketi")
+                Text(p?.pkgW.map { w($0) + (p?.coresW.map { String(format: " (çekirdekler %.1f)", $0) } ?? "") }
+                     ?? (state.raplAvailable ? "ölçülüyor…" : "GU605CPU 0.3 gerekli")).monospacedDigit()
+            }
+            if let ps = p?.psysW { GridRow { Text("Platform (PSys)"); Text(w(ps)).monospacedDigit() } }
+            if let g = p?.gfxW { GridRow { Text("Intel GPU"); Text(w(g)).monospacedDigit() } }
+            if let t = p?.pkgTemp { GridRow { Text("CPU paket sıcaklığı"); Text("\(t) °C") } }
+            if let on = p?.dgpuOn {
+                GridRow {
+                    Text("NVIDIA")
+                    Text(on ? "açık (PCIe bağlantısı var)" : "gücü kesik").foregroundColor(on && state.gpuMode == .eco ? .orange : .primary)
+                }
+            }
+            if let h = b.health {
+                GridRow {
+                    Text("Pil sağlığı")
+                    Text("%\(h) (\(b.rawMax ?? 0)/\(b.design ?? 0) mAh, \(b.cycles ?? 0) döngü)")
+                }
+            }
+        }.font(.callout)
+        if !state.topProcs.isEmpty {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("En çok işlemci kullananlar").font(.caption).foregroundColor(.secondary)
+                ForEach(state.topProcs) { pr in
+                    HStack {
+                        Text(pr.name).lineLimit(1)
+                        Spacer()
+                        Text(String(format: "%%%.0f", pr.percent)).monospacedDigit()
+                    }.font(.caption)
+                }
+            }
+        }
     }
 }
 
@@ -241,6 +300,19 @@ struct EditorView: View {
                             .font(.caption).foregroundColor(.secondary)
                     }.padding(6)
                 } label: { Text("Pil şarj limiti").font(.title3) }
+
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Picker("Gösterilen değer", selection: Binding(
+                            get: { state.store.menuSource ?? .auto }, set: { state.setMenuSource($0) })) {
+                            ForEach(MenuSource.allCases) { m in Text(m.name).tag(m) }
+                        }
+                        Toggle("Mod harfini de göster (S/B/T, özel eğride +)", isOn: Binding(
+                            get: { state.store.menuShowMode ?? true }, set: { state.setMenuShowMode($0) }))
+                        Text("Pildeki güç, pil yakıt göstergesinin anlık akım × geriliminden okunur (EC birkaç saniyede bir yeniler). CPU ve PSys, GU605CPU.kext'in RAPL sayaçlarından iki okuma arasında hesaplanır.")
+                            .font(.caption).foregroundColor(.secondary)
+                    }.padding(6)
+                } label: { Text("Üst bar").font(.title3) }
 
                 HStack {
                     Button("Kaydet ve uygula") { saveAndApply() }

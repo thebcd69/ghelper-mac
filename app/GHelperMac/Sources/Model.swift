@@ -144,6 +144,10 @@ struct Store: Codable {
     /// True when the target needs two restarts (Ultimate -> Eco): only then the app arms it again after a boot.
     var gpuTargetTwoStep: Bool?
     var profiles: [String: ModeProfile] = [:]
+    /// What the menu-bar title shows (nil = auto).
+    var menuSource: MenuSource?
+    /// Show the performance-mode letter next to the value in the menu bar (nil = yes).
+    var menuShowMode: Bool?
 
     func profile(_ m: Mode) -> ModeProfile { profiles[String(m.rawValue)] ?? ModeProfile() }
     mutating func setProfile(_ m: Mode, _ p: ModeProfile) { profiles[String(m.rawValue)] = p }

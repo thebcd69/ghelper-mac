@@ -28,6 +28,14 @@ final class AppState: ObservableObject {
     @Published var floors: [Fan: [Int]] = [:]
     @Published var loginItem = false
     @Published var brightness: Float?   // nil = NullMoth published no backlight (nvrmacpibl=1 needed)
+    @Published var batt = BatteryInfo()
+    @Published var cpuPower: CPUPower?
+    @Published var topProcs: [ProcLoad] = []
+    var panelVisible = false { didSet { if panelVisible { topProcs = procSampler.top(3) } } }
+    private let rapl = RAPLReader()
+    private let procSampler = ProcSampler()
+    private var pollCount = 0
+    var raplAvailable: Bool { rapl.available }
 
     private var timer: Timer?
     private var lastApply = Date.distantPast
@@ -53,11 +61,27 @@ final class AppState: ObservableObject {
     var gpuPendingTwoStep: Bool { (info?.gpuPlan ?? 0) & ATKD.planTwoStep != 0 }
 
     var menuTitle: String {
-        var s = cpuTemp.map { "\($0)°" } ?? "--°"
-        if let m = mode { s += " " + String(m.name.prefix(1)) }
-        if let m = mode, store.profile(m).customFans { s += "+" }
+        var s: String
+        func watts(_ w: Double?) -> String { w.map { $0 < 9.95 ? String(format: "%.1fW", $0) : String(format: "%.0fW", $0) } ?? "--W" }
+        let temp = cpuPower?.pkgTemp ?? cpuTemp
+        switch store.menuSource ?? .auto {
+        case .auto:
+            if !onAC, let w = batt.watts, w > 0 { s = watts(w) }
+            else { s = "⚡" + watts(cpuPower?.psysW ?? cpuPower?.pkgW) }
+        case .battery: s = watts(batt.watts.map { abs($0) })
+        case .cpu: s = watts(cpuPower?.pkgW)
+        case .platform: s = watts(cpuPower?.psysW)
+        case .temp: s = temp.map { "\($0)°" } ?? "--°"
+        }
+        if store.menuShowMode ?? true {
+            if let m = mode { s += " " + String(m.name.prefix(1)) }
+            if let m = mode, store.profile(m).customFans { s += "+" }
+        }
         return s
     }
+
+    func setMenuSource(_ m: MenuSource) { store.menuSource = m; store.save() }
+    func setMenuShowMode(_ b: Bool) { store.menuShowMode = b; store.save() }
 
     init() {
         if #available(macOS 13.0, *) { loginItem = SMAppService.mainApp.status == .enabled }
@@ -109,6 +133,10 @@ final class AppState: ObservableObject {
 
     func poll() {
         onAC = Self.isOnAC()
+        batt = BatteryReader.read()
+        if let p = rapl.sample() { cpuPower = p } else { cpuPower = nil }
+        pollCount += 1
+        if panelVisible, pollCount % 2 == 0 { topProcs = procSampler.top(3) }
         if !brightnessDragging { brightness = Brightness.get() }
         if !connected { connect(); if !connected { return } }
         info = client.info()
