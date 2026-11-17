@@ -286,3 +286,13 @@ has run APIC-BSP0.aml (BSP first as uid 0, the 12 P-core threads as uid 0-11, th
 APIC-E8.aml = APIC-BSP0.aml + the 8 E-cores enabled as uid 12-19 (SSDT-PLUG-ALT has Processor objects for 0-47);
 LP-E cores left out. tools/opencore/ocpatch-e8.py switches ACPI->Add from APIC-BSP0 to APIC-E8.
 macOS on Intel has no hybrid-aware scheduler (no Thread Director): threads land on P and E cores alike.
+
+Result on the GU605 (macOS 15.8.1), 2026-11-17 — **E-cores dropped, the machine stays at 6 P-cores / 12 threads**:
+- APIC-E8 alone: panic during CPU bring-up, `processor_boot() missing for cpu 1 @processor.c:876` (raised on cpu 18, so
+  the E-cores had started; the first P-core sibling never did). Most likely why the installer had not got through with
+  all 22 threads either.
+- APIC-E8 + CpuTopologyRebuild 2.0.2 (after Lilu; its E/P split by 8-wide APIC groups fits this layout): hang at the
+  same point, after the AppleACPICPU list, no panic text. The kext replaces x86_validate_topology; the failure is
+  earlier, in starting a CPU.
+- Both rolled back by the Windows-side agent to config.plist.before-ctr-20261117-125023 (= the XCPM-patched, P-only
+  config, SHA-256 7BEE2BCBFE40B40E...). CpuTopologyRebuild.kext and APIC-E8.aml stay on the EFI, unused.
