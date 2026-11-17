@@ -237,3 +237,23 @@ The Standard boot between Ultimate and Eco needs nobody at the keyboard: the app
 `/Users/Shared/GHelperMac/gpu-next`; the GU605 boot runner (`gu605-auto.sh`, root, WTLIntelGfx branch `gu605-mac`)
 finds it in a Standard boot, arms Eco through `tools/ghelperctl gpu eco` and runs `shutdown -r now`, once (the flag
 is moved into the run's log folder first; `gu605.conf` `GPU_NEXT=0` switches this off).
+
+## 13. CPU clocks under XCPM (GU605CPU.kext) — 2026-11-17
+
+Symptom: under a 12-thread load each P-core stayed at its own fixed clock (3.96 / 2.06 / 0.86 / 0.85 / 0.57 / 0.55 GHz),
+package ~9.7 W, no thermal or power limit; one core never above 3.96 GHz.
+
+Cause (MSR dump, `sysctl debug.gu605cpu_dump`): HWP is on (IA32_PM_ENABLE = 1) and XCPM (Comet Lake CPUID spoof,
+MacBookPro16,2) writes IA32_HWP_REQUEST per CPU with max = 0x33 and a desired value of its own (0x08 .. 0x33) in
+100 MHz units. On this hybrid CPU HWP counts ~78 MHz per unit (HWP_CAPABILITIES highest 0x40 on the two favoured
+cores, 0x3C on the others), so max 0x33 = ~4.0 GHz and desired 0x08 = ~0.6 GHz; and XCPM did not raise the desired
+value on most cores under load.
+
+Fix: IA32_HWP_REQUEST = 0x80004004 on every CPU (min 4, max 0x40, desired 0 = hardware chooses, EPP 0x80),
+re-applied every 500 ms (XCPM rewrites it ~140 times a second when idle, rarely under load).
+Measured (powermetrics): one thread 4.99 GHz; six cores 4.55 GHz at the 35 W limit set in G-Helper (was 1.47 GHz at
+9.7 W). BCD probe (hiz-olcumu.sh): single core 1.90 -> 1.10 s, 12 cores 5.17 -> 2.79 s, 3 at once 2.50 -> 1.54 s;
+3000 process starts 10.4 -> 8.9 s (not clock-bound).
+
+Install: kext in /Library/Extensions + auxiliary collection; tools/gu605cpu/ LaunchDaemon + script apply it at boot
+(gu605.conf `CPU_HWP=0` turns it off).
