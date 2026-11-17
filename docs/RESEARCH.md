@@ -275,3 +275,14 @@ XCPM's HWP request builder (unnamed function at kernel vmaddr 0xffffff800046a250
 
 min (4) and EPP (XCPM's, 0x80) are left as they are: idle stays low, the hardware picks the clock under load
 (the same as Windows' balanced plan). No periodic work, no cross-CPU calls. tools/opencore/ocpatch-xcpm.py adds them.
+
+## 14. E-cores (MADT) — 2026-11-17
+
+The firmware MADT (dumped from Windows with GetSystemFirmwareTable, 604 bytes, SHA-256 8D293504...) lists 22 enabled
+LAPICs: BSP 0x20 (uid 12), P-core threads 0x10/11, 0x18/19, 0x20/21, 0x28/29, 0x30/31, 0x38/39 (uid 8-19), E-cores
+0x00-0x0E even (uid 0-7), LP-E cores 0x40/0x42 (uid 20-21). The installer had not got through with all 22, so the EFI
+has run APIC-BSP0.aml (BSP first as uid 0, the 12 P-core threads as uid 0-11, the rest disabled).
+
+APIC-E8.aml = APIC-BSP0.aml + the 8 E-cores enabled as uid 12-19 (SSDT-PLUG-ALT has Processor objects for 0-47);
+LP-E cores left out. tools/opencore/ocpatch-e8.py switches ACPI->Add from APIC-BSP0 to APIC-E8.
+macOS on Intel has no hybrid-aware scheduler (no Thread Director): threads land on P and E cores alike.
