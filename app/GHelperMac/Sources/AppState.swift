@@ -211,6 +211,8 @@ final class AppState: ObservableObject {
                 case .success(let v):
                     let g = v >> 16
                     self.note(g == 0 ? "Eco: NVIDIA'nın gücü kesildi (RP12.GHOF)"
+                              : g == 3 ? "Eco: NVIDIA'nın gücü kesildi (RP12.DL23 + POFF; UMFG eski oturumdan 1 kalmıştı)"
+                              : g == 4 ? "Eco: RP12.DL23/POFF çalıştırılamadı (kext günlüğüne bakın)"
                               : g == 2 ? "Eco: BIOS NVIDIA'yı zaten kapalı sayıyor (UMFG 1)"
                               : "Eco: EC Eco'da değil (UMAF 0), DEVS 0x\(String(v & 0xFFFF, radix: 16)) — dokunulmadı")
                 case .failure(let e): self.note("Eco yeniden bildirilemedi: \(e)")

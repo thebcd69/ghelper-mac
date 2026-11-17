@@ -901,6 +901,15 @@ IOReturn ASUSATKD::ecoReassert(uint32_t *biosRet) {
 			g = 0xFF;
 			rg = rp ? rp->evaluateInteger("GHOF", &g) : kIOReturnNotFound;
 		}
+		// 3) GHOF 2 = UMFG already 1. UMFG lives in ACPI NVS and survives a warm restart: after one session in
+		//    which _Q3F did power the GPU off, later Eco boots start with UMFG 1 and the GPU powered, link up
+		//    (2026-11-17 14:57). The caller only asks while the link is up, so run the two steps directly.
+		if (rp && rg == kIOReturnSuccess && g == 2) {
+			IOReturn r1 = rp->evaluateObject("DL23");
+			IOReturn r2 = rp->evaluateObject("POFF");
+			ATKDLOG("Eco reassert: UMFG was 1 with the link up: RP12.DL23 -> 0x%x, RP12.POFF -> 0x%x", r1, r2);
+			g = (r1 == kIOReturnSuccess && r2 == kIOReturnSuccess) ? 3 : 4;
+		}
 		OSSafeReleaseNULL(rpe);
 		ATKDLOG("Eco reassert: RP12.GHOF -> %u (ior 0x%x)", g, rg);
 		*biosRet = ((g & 0xFF) << 16) | (devsRet & 0xFFFF);
