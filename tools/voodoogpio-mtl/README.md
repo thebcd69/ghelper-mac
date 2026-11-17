@@ -17,3 +17,9 @@ GPIROUTIOXAPIC set), DW1 INTSEL = 0x58, HOSTSW_OWN bit 0 = 1 (host), PADCFGLOCK 
 VoodooGPIO never clears GPIROUTIOXAPIC/SCI/SMI/NMI (Linux does in intel_gpio_set_gpio_mode()), so the touchpad's
 events go to IOxAPIC IRQ 88 and never to the GPIO controller's IRQ 14. `VoodooGPIOIntel.cpp.patched` clears them
 (and sets RX on / TX off) in intel_gpio_irq_set_type().
+
+Second try 14:48 (routing cleared: GPP_B0 DW0 0x90800102): still no events. Sampling all GPP_B pads every 0.35 s
+for 15 s while the touchpad was used showed no RX change on any of them, GPI_IS stayed 0. So the touchpad's
+interrupt line did not move at all in GPIO mode (the device seems never to raise it, or it is not GPP_B0 on this
+unit despite GpioInt 352 / INTSEL 0x58). Boot logs were already gone from the 1 MB message buffer. Parked;
+polling restored (`-vi2c-force-polling`).

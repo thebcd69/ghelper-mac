@@ -882,8 +882,12 @@ IOReturn ASUSATKD::ecoReassert(uint32_t *biosRet) {
 	if (gpuReadLocked(&eco, &mux) && eco == 1 && mux == 1) {
 		// 1) SSDT-RP12PWR rev 0x1001: GHOF = the tail of _Q3F (RP12.DL23 + POFF, UMFG 1, WOSR 0, UFON 0),
 		//    only while the EC says Eco (UMAF 1). 0 = done, 1 = UMAF 0, 2 = already off.
+		// Evaluated on RP12's own ACPI node: AppleACPIPlatform refused the absolute path from ATKD
+		// (kIOReturnBadArgument, 0.0.8, 2026-11-17 14:48).
+		IORegistryEntry *rpe = IORegistryEntry::fromPath("IOACPIPlane:/_SB/PC00@0/RP12@10000");
+		IOACPIPlatformDevice *rp = OSDynamicCast(IOACPIPlatformDevice, rpe);
 		UInt32 g = 0xFF;
-		IOReturn rg = atkd->evaluateInteger("\\_SB.PC00.RP12.GHOF", &g);
+		IOReturn rg = rp ? rp->evaluateInteger("GHOF", &g) : kIOReturnNotFound;
 		uint32_t devsRet = 0xFFFF;
 		if (rg != kIOReturnSuccess || g == 1) {
 			// 2) As G-Helper: Eco once more (sets UMAF), then GHOF again.
@@ -895,8 +899,9 @@ IOReturn ASUSATKD::ecoReassert(uint32_t *biosRet) {
 			ATKDLOG("Eco reassert: DEVS dgpu = 1 -> 0x%x (ior 0x%x, %u ms)", devsRet, rd,
 			        static_cast<uint32_t>((uptimeNs() - t0) / 1000000ULL));
 			g = 0xFF;
-			rg = atkd->evaluateInteger("\\_SB.PC00.RP12.GHOF", &g);
+			rg = rp ? rp->evaluateInteger("GHOF", &g) : kIOReturnNotFound;
 		}
+		OSSafeReleaseNULL(rpe);
 		ATKDLOG("Eco reassert: RP12.GHOF -> %u (ior 0x%x)", g, rg);
 		*biosRet = ((g & 0xFF) << 16) | (devsRet & 0xFFFF);
 		r = rg;
