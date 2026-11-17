@@ -869,6 +869,33 @@ IOReturn ASUSATKD::setGpuTarget(uint32_t target, uint32_t *plan) {
 	return r;
 }
 
+// ABI 4. G-Helper sets Eco again when it starts in Eco; on this machine the EC cuts the dGPU's power only in
+// answer to that (DEVS -> UMAF, WOSR -> EC query _Q3F -> RP12.DL23 + RP12.POFF, SSDT-RP12PWR on macOS). In a
+// boot that comes up in Eco without it the GPU can stay powered with its link up (2026-11-17, ~8 W more).
+// Only when the BIOS already reports Eco and the MUX is on hybrid: nothing about the mode changes.
+IOReturn ASUSATKD::ecoReassert(uint32_t *biosRet) {
+	if (!writesEnabled || !gpuPresent)
+		return kIOReturnNotPermitted;
+	IOLockLock(lock);
+	uint32_t eco = 0, mux = 0;
+	IOReturn r = kIOReturnNotReady;
+	if (gpuReadLocked(&eco, &mux) && eco == 1 && mux == 1) {
+		uint32_t args[5] = {ATKD_DEV_DGPU, 1, 0, 0, 0};
+		uint32_t ret = 0xDEAD;
+		uint64_t t0 = uptimeNs();
+		r = wmnbIntegerLocked(ATKD_METHOD_DEVS, args, &ret);
+		writeCount++;
+		lastBiosResult = ret;
+		*biosRet = ret;
+		ATKDLOG("Eco reassert: DEVS dgpu (0x%08x) = 1 -> 0x%x (ior 0x%x, %u ms)", ATKD_DEV_DGPU, ret, r,
+		        static_cast<uint32_t>((uptimeNs() - t0) / 1000000ULL));
+	} else {
+		ATKDLOG("Eco reassert refused: eco %u mux %u", eco, mux);
+	}
+	IOLockUnlock(lock);
+	return r;
+}
+
 uint32_t ASUSATKD::gpuDevsLocked(uint32_t devId, uint32_t value, const char *what) {
 	uint32_t args[5] = {devId, value, 0, 0, 0};
 	uint32_t ret = 0xDEAD;

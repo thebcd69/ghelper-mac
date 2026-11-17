@@ -12,6 +12,11 @@
 //   sysctl debug.gu605cpu_power           package-scope counters read on whichever CPU runs the sysctl, no rendezvous,
 //                                         no IPI: RAPL units/energy (package, PSys, cores, graphics), TjMax, package
 //                                         temperature, and the live PCIe link status of RP12 (the dGPU root port).
+// v0.4 (2026-11-17), touchpad interrupt diagnosis on Meteor Lake (GPI0 = INTC1083, touchpad GpioInt 352 = GPP_B0):
+//   sysctl debug.gu605cpu_gpio            GPIO community 5 (GPP_B / GPP_D, 4th memory range of GPI0) read only: REVID,
+//                                         PADBAR, PAD_OWN, PADCFGLOCK(TX), HOSTSW_OWN, GPI_IS, GPI_IE, and PADCFG
+//                                         DW0/DW1 of the GPP_B pads. Nothing is written.
+#include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOLib.h>
 #include <sys/sysctl.h>
@@ -65,7 +70,7 @@ static int dumpHandler SYSCTL_HANDLER_ARGS {
     bzero(&gR, sizeof gR);
     mp_rendezvous_no_intrs(readAction, nullptr);
     size_t n = 0;
-    n += snprintf(gBuf + n, sizeof gBuf - n, "GU605CPU 0.3 (read only)\n");
+    n += snprintf(gBuf + n, sizeof gBuf - n, "GU605CPU 0.4 (read only)\n");
     for (int c = 0; c < kMaxCpu && n < sizeof gBuf - 512; c++) {
         if (!gR.seen[c]) continue;
         n += snprintf(gBuf + n, sizeof gBuf - n, "cpu %2d apic %3u", c, gR.apic[c]);
@@ -127,6 +132,53 @@ static int powerHandler SYSCTL_HANDLER_ARGS {
 }
 SYSCTL_PROC(_debug, OID_AUTO, gu605cpu_power, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED, nullptr, 0, powerHandler, "A", "");
 
+// ---- GPIO (v0.4) ----
+static char gGBuf[4096];
+static int gpioHandler SYSCTL_HANDLER_ARGS {
+    IOLockLock(gLock);
+    size_t n = 0;
+    IOService *g = nullptr;
+    if (OSDictionary *m = IOService::nameMatching("INTC1083")) {
+        if (OSIterator *it = IOService::getMatchingServices(m)) {
+            while (OSObject *o = it->getNextObject())
+                if ((g = OSDynamicCast(IOService, o)) && OSDynamicCast(IOService, o)->getDeviceMemoryCount() >= 5) { g->retain(); break; }
+                else g = nullptr;
+            it->release();
+        }
+        m->release();
+    }
+    if (!g) {
+        n = (size_t)snprintf(gGBuf, sizeof gGBuf, "GPI0 not found\n");
+    } else {
+        // GPI0 _CRS memory order: D1, D2, D3, D4, D5 (Linux barno 0..4). GPP_B/GPP_D live in D5 = index 4.
+        IOMemoryMap *mm = g->mapDeviceMemoryWithIndex(4);
+        if (!mm) {
+            n = (size_t)snprintf(gGBuf, sizeof gGBuf, "GPI0 memory index 4 not mappable\n");
+        } else {
+            volatile uint32_t *r = (volatile uint32_t *)mm->getVirtualAddress();
+            const uint32_t len = (uint32_t)mm->getLength();
+            auto rd32 = [&](uint32_t off) -> uint32_t { return off + 4 <= len ? r[off / 4] : 0xFFFFFFFFu; };
+            const uint32_t rev = rd32(0x0), padbar = rd32(0xC);
+            n += (size_t)snprintf(gGBuf + n, sizeof gGBuf - n, "D5 len=0x%x REVID=0x%08x PADBAR=0x%x\n", len, rev, padbar);
+            n += (size_t)snprintf(gGBuf + n, sizeof gGBuf - n, "PAD_OWN 0xb0..: %08x %08x %08x %08x\n", rd32(0xb0), rd32(0xb4), rd32(0xb8), rd32(0xbc));
+            n += (size_t)snprintf(gGBuf + n, sizeof gGBuf - n, "PADCFGLOCK 0x110: %08x %08x  TX %08x %08x\n", rd32(0x110), rd32(0x114), rd32(0x118), rd32(0x11c));
+            n += (size_t)snprintf(gGBuf + n, sizeof gGBuf - n, "HOSTSW_OWN 0x140: %08x %08x %08x %08x\n", rd32(0x140), rd32(0x144), rd32(0x148), rd32(0x14c));
+            n += (size_t)snprintf(gGBuf + n, sizeof gGBuf - n, "GPI_IS 0x200: %08x %08x  GPI_IE 0x210: %08x %08x\n", rd32(0x200), rd32(0x204), rd32(0x210), rd32(0x214));
+            n += (size_t)snprintf(gGBuf + n, sizeof gGBuf - n, "GPI_GPE_STS 0x230: %08x %08x  GPE_EN 0x250: %08x %08x\n", rd32(0x230), rd32(0x234), rd32(0x250), rd32(0x254));
+            const uint32_t stride = ((rev >> 16) >= 0x94) ? 16 : 8;
+            for (uint32_t p = 0; p < 25 && n < sizeof gGBuf - 64; p++)
+                n += (size_t)snprintf(gGBuf + n, sizeof gGBuf - n, "GPP_B%-2u DW0=%08x DW1=%08x\n", p,
+                                      rd32(padbar + p * stride), rd32(padbar + p * stride + 4));
+            mm->release();
+        }
+    }
+    OSSafeReleaseNULL(g);
+    int er = SYSCTL_OUT(req, gGBuf, n + 1);
+    IOLockUnlock(gLock);
+    return er;
+}
+SYSCTL_PROC(_debug, OID_AUTO, gu605cpu_gpio, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED, nullptr, 0, gpioHandler, "A", "");
+
 SYSCTL_PROC(_debug, OID_AUTO, gu605cpu_dump, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED, nullptr, 0, dumpHandler, "A", "");
 
 class GU605CPU : public IOService {
@@ -138,11 +190,13 @@ public:
         if (!gLock) return false;
         sysctl_register_oid(&sysctl__debug_gu605cpu_dump);
         sysctl_register_oid(&sysctl__debug_gu605cpu_power);
-        LOG("started (0.3, read only; nothing is touched until debug.gu605cpu_dump / _power is read)");
+        sysctl_register_oid(&sysctl__debug_gu605cpu_gpio);
+        LOG("started (0.4, read only; nothing is touched until debug.gu605cpu_dump / _power is read)");
         registerService();
         return true;
     }
     void stop(IOService *provider) override {
+        sysctl_unregister_oid(&sysctl__debug_gu605cpu_gpio);
         sysctl_unregister_oid(&sysctl__debug_gu605cpu_power);
         sysctl_unregister_oid(&sysctl__debug_gu605cpu_dump);
         if (gRP12) { gRP12->release(); gRP12 = nullptr; }

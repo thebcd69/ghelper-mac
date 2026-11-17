@@ -35,6 +35,9 @@ final class AppState: ObservableObject {
     private let rapl = RAPLReader()
     private let procSampler = ProcSampler()
     private var pollCount = 0
+    private var ecoTries = 0
+    private var ecoLast = Date.distantPast
+    private var ecoWorking = false
     var raplAvailable: Bool { rapl.available }
 
     private var timer: Timer?
@@ -137,6 +140,7 @@ final class AppState: ObservableObject {
         if let p = rapl.sample() { cpuPower = p } else { cpuPower = nil }
         pollCount += 1
         if panelVisible, pollCount % 2 == 0 { topProcs = procSampler.top(3) }
+        if ecoWorking { return }                 // the kext is busy in the BIOS (ecoReassert); no ATKD calls meanwhile
         if !brightnessDragging { brightness = Brightness.get() }
         if !connected { connect(); if !connected { return } }
         info = client.info()
@@ -173,6 +177,8 @@ final class AppState: ObservableObject {
             }
         }
 
+        ecoCheck()
+
         // BIOS dropped the custom curve (sleep, Fn key, EC reset) -> re-apply, at most every 30 s.
         if let m = mode, !busy, store.profile(m).customFans || store.profile(m).customPower,
            fmae == false, Date().timeIntervalSince(lastApply) > 30 {
@@ -186,6 +192,26 @@ final class AppState: ObservableObject {
             }
         } else if fmae == true {
             autoReapplyPaused = false
+        }
+    }
+
+    /// Like G-Helper at start: in Eco with the NVIDIA link still up, set Eco once more so the EC powers the GPU off
+    /// (DEVS -> EC query _Q3F -> RP12.DL23/POFF). At most 2 tries per session, 60 s apart, 20 s after launch at the earliest.
+    private func ecoCheck() {
+        guard gpuMode == .eco, cpuPower?.dgpuOn == true, writesEnabled, (info?.abiVersion ?? 0) >= 4,
+              ecoTries < 2, Date().timeIntervalSince(ecoLast) > 60, pollCount > 10 else { return }
+        ecoTries += 1; ecoLast = Date(); ecoWorking = true
+        note("Eco: NVIDIA hâlâ açık — BIOS'a Eco yeniden bildiriliyor (deneme \(ecoTries))")
+        let c = client
+        DispatchQueue.global(qos: .utility).async {
+            let r = c.ecoReassert()
+            DispatchQueue.main.async {
+                self.ecoWorking = false
+                switch r {
+                case .success(let v): self.note("Eco yeniden bildirildi (BIOS 0x\(String(v, radix: 16))); NVIDIA durumu birkaç sn içinde güncellenir")
+                case .failure(let e): self.note("Eco yeniden bildirilemedi: \(e)")
+                }
+            }
         }
     }
 

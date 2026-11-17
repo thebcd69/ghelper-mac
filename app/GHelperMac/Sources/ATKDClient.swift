@@ -6,7 +6,7 @@ import IOKit
 
 enum ATKD {
     static let serviceClass = "ASUSATKD"
-    static let abiVersion: UInt32 = 3
+    static let abiVersion: UInt32 = 4
 
     // selectors
     static let selGetInfo: UInt32 = 0
@@ -19,6 +19,7 @@ enum ATKD {
     static let selReadCurve: UInt32 = 7
     static let selSetChargeLimit: UInt32 = 8
     static let selSetGpuTarget: UInt32 = 9   // ABI 3: arms a GPU mode for the next restart/shutdown
+    static let selEcoReassert: UInt32 = 10   // ABI 4: DEVS 0x00090020 = 1 again while already in Eco (dGPU power off)
 
     // plan bits returned by selSetGpuTarget (ATKDShared.h)
     static let planEcoOn: UInt32 = 1 << 0
@@ -218,6 +219,12 @@ final class ATKDClient {
     /// Arm (1 Eco, 2 Standard, 3 Ultimate) or clear (0) the GPU mode the kext writes at restart/shutdown. Returns the plan bits.
     func setGpuTarget(_ target: Int) -> Result<UInt32, ATKDError> {
         call(ATKD.selSetGpuTarget, [UInt64(target)], scalarOut: 1)
+            .map { UInt32(truncatingIfNeeded: $0.0.first ?? 0) }
+    }
+
+    /// ABI 4: already in Eco -> ask the BIOS for Eco once more so the EC cuts the dGPU's power. Blocks up to 15 s.
+    func ecoReassert() -> Result<UInt32, ATKDError> {
+        call(ATKD.selEcoReassert, [], scalarOut: 1)
             .map { UInt32(truncatingIfNeeded: $0.0.first ?? 0) }
     }
 }

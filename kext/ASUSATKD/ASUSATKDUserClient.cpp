@@ -20,6 +20,7 @@ const IOExternalMethodDispatch ASUSATKDUserClient::sMethods[kATKDSelCount] = {
 	{&ASUSATKDUserClient::sReadCurve,   1, 0,                    0, ATKD_FAN_CURVE_BYTES},
 	{&ASUSATKDUserClient::sSetChargeLimit, 1, 0,                 1, 0},
 	{&ASUSATKDUserClient::sSetGpuTarget,   1, 0,                 1, 0},
+	{&ASUSATKDUserClient::sEcoReassert,    0, 0,                 1, 0},
 };
 
 bool ASUSATKDUserClient::initWithTask(task_t owningTask, void *securityToken, UInt32 type, OSDictionary *properties) {
@@ -165,5 +166,17 @@ IOReturn ASUSATKDUserClient::sSetGpuTarget(OSObject *target, void *, IOExternalM
 	uint32_t plan = 0;
 	IOReturn r = self->drv->setGpuTarget(static_cast<uint32_t>(a->scalarInput[0]), &plan);
 	a->scalarOutput[0] = plan;
+	return r;
+}
+
+IOReturn ASUSATKDUserClient::sEcoReassert(OSObject *target, void *, IOExternalMethodArguments *a) {
+	auto self = uc(target);
+	if (!self)
+		return kIOReturnBadArgument;
+	if (!self->mayWrite)
+		return kIOReturnNotPrivileged;
+	uint32_t ret = 0;
+	IOReturn r = self->drv->ecoReassert(&ret);
+	a->scalarOutput[0] = ret;
 	return r;
 }

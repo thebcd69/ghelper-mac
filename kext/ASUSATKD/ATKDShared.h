@@ -11,7 +11,7 @@
 
 #include <stdint.h>
 
-#define ATKD_ABI_VERSION        3u
+#define ATKD_ABI_VERSION        4u
 #define ATKD_SERVICE_CLASS      "ASUSATKD"
 
 // ---- IOUserClient selectors ----
@@ -27,6 +27,9 @@ enum {
 	kATKDSelSetChargeLimit  = 8, // in: scalar[0]=percent (ATKD_CHARGE_MIN..100) ; out: scalar[0]=BIOS ret
 	kATKDSelSetGpuTarget    = 9, // in: scalar[0]=ATKDGpuTarget ; out: scalar[0]=plan bits (ABI 3). Nothing is written
 	                             // to the BIOS here: the plan runs when macOS restarts or shuts down.
+	kATKDSelEcoReassert     = 10, // ABI 4: in: none ; out: scalar[0]=BIOS ret. Only when already in Eco (DSTS 0x00090020 = 1)
+	                              // with the MUX on hybrid: DEVS 0x00090020 = 1 once more, as G-Helper does at start, so the
+	                              // EC runs _Q3F (RP12.DL23 + POFF) and the dGPU loses power. Blocks up to 15 s (ATKD.WAT1).
 	kATKDSelCount
 };
 

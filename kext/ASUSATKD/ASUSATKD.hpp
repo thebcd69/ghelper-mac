@@ -43,6 +43,7 @@ public:
 	IOReturn readCurve(uint32_t fan, uint8_t *out16);
 	IOReturn setChargeLimit(uint32_t percent, uint32_t *biosRet);
 	IOReturn setGpuTarget(uint32_t target, uint32_t *plan);
+	IOReturn ecoReassert(uint32_t *biosRet);
 
 	// IOPlatformHaltRestartAction: called by xnu at the very end of a restart / shutdown (see gpumode.inc)
 	using IOService::callPlatformFunction;
@@ -139,6 +140,7 @@ private:
 	static IOReturn sReadCurve(OSObject *target, void *ref, IOExternalMethodArguments *a);
 	static IOReturn sSetChargeLimit(OSObject *target, void *ref, IOExternalMethodArguments *a);
 	static IOReturn sSetGpuTarget(OSObject *target, void *ref, IOExternalMethodArguments *a);
+	static IOReturn sEcoReassert(OSObject *target, void *ref, IOExternalMethodArguments *a);
 };
 
 #endif /* ASUSATKD_hpp */
