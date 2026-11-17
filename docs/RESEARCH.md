@@ -296,3 +296,26 @@ Result on the GU605 (macOS 15.8.1), 2026-11-17 — **E-cores dropped, the machin
   earlier, in starting a CPU.
 - Both rolled back by the Windows-side agent to config.plist.before-ctr-20261117-125023 (= the XCPM-patched, P-only
   config, SHA-256 7BEE2BCBFE40B40E...). CpuTopologyRebuild.kext and APIC-E8.aml stay on the EFI, unused.
+
+## 15. Eco battery drain: dGPU never powered off — 2026-11-17
+
+Symptom: Eco on battery drew 57–66 W (Windows Eco at the same 35 W CPU limit: 4–5 h).
+
+Cause (from the firmware tables dumped in Windows): the dGPU power-off in Eco is
+EC query `_Q3F` (battery event) → `If (UFON && UMAF) { RP12.DL23(); RP12.POFF(); UMFG = 1; WOSR = 0; UFON = 0 }`.
+`RP12.DL23` is in the DSDT, but `RP12.POFF` (and `PON`, `NCHK`) exist only in SSDT `MtlP_Rvp`.
+macOS's ACPICA rejects that whole table: its `Scope (\_SB.PC00.I2C3)` targets a device the DSDT
+creates inside module-level `If (PCHS != 4)`, which old ACPICA runs only after all tables are loaded
+(AE_NOT_FOUND → table load failure). So `_Q3F` aborted at `POFF` on every battery event: the GPU kept
+power, and `UMFG`/`WOSR`/`UFON` were never updated (also the cause of the halt hook's Eco "timeout").
+ATKD `WAT2` (Eco off) calls `RP12.NCHK`, also missing.
+
+Fix: `tools/opencore/SSDT-RP12PWR.aml` re-creates only `POFF`, `PON`, `NCHK` (1:1 from MtlP_Rvp rev 0x1000,
+inside `If (_OSI ("Darwin"))`), plus the state they read. Left out on purpose: the PXP power resource and
+`_PR0/_PR3` (its `_ON` waits forever for vendor 0x10DE if the GPU does not come up), CEMP/RPSC (PS_ON
+bookkeeping), PSD0/PSD3 (PRTP 2 only; RP12 is PRTP 4). Checked in acpiexec with the patched DSDT and
+the firmware SSDTs. Added to OpenCore `ACPI → Add` with `ocpatch-rp12.py` (backup + read-back).
+
+Result (hardware, Eco, battery, monitor attached): after the first battery event ~1.5 min into the
+session, draw fell from ~57 W (InstantAmperage −3993 mA at 14.35 V) to 24.5 W (−1640 mA at 14.9 V).
+Note: in this Eco boot the GPU was enumerated (GFX0 10de:2757 under RP12) before the power-off.

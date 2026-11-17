@@ -1,5 +1,8 @@
 # STATUS
 
+## 2026-11-17: Eco dGPU power-off (SSDT-RP12PWR)
+- `RP12.POFF` was missing in macOS (SSDT MtlP_Rvp rejected), so Eco never cut dGPU power. New `tools/opencore/SSDT-RP12PWR.aml` on the EFI: battery draw 57 W → 24.5 W. See RESEARCH §15.
+
 ## 2026-11-16: v0.0.6 — GPU mode switch (Eco / Standard / Ultimate)
 - Kext ABI 3: DSTS 0x00090020 / 0x00090016 readable, selector 9 arms a GPU mode, written by the
   `IOPlatformHaltRestartAction` hook at restart/shutdown (docs/RESEARCH.md §12). App: segmented picker in the menu
