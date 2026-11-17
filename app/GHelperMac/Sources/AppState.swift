@@ -208,7 +208,11 @@ final class AppState: ObservableObject {
             DispatchQueue.main.async {
                 self.ecoWorking = false
                 switch r {
-                case .success(let v): self.note("Eco yeniden bildirildi (BIOS 0x\(String(v, radix: 16))); NVIDIA durumu birkaç sn içinde güncellenir")
+                case .success(let v):
+                    let g = v >> 16
+                    self.note(g == 0 ? "Eco: NVIDIA'nın gücü kesildi (RP12.GHOF)"
+                              : g == 2 ? "Eco: BIOS NVIDIA'yı zaten kapalı sayıyor (UMFG 1)"
+                              : "Eco: EC Eco'da değil (UMAF 0), DEVS 0x\(String(v & 0xFFFF, radix: 16)) — dokunulmadı")
                 case .failure(let e): self.note("Eco yeniden bildirilemedi: \(e)")
                 }
             }

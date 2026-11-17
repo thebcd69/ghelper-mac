@@ -15,8 +15,13 @@
  *     either), PSD0/PSD3 (only for PRTP==2; RP12 is PRTP 4),
  *   - DVES (only exists when DGBA != 0, Intel dGPU), PCPB (unset -> skipped).
  * Darwin only; on any other OS this table defines nothing.
+ *
+ * Rev 0x1001 (2026-11-17): GHOF, the tail of EC query _Q3F as a method of its own. In some Eco boots the EC
+ * never raises _Q3F with UFON set (not even after DEVS 0x00090020 = 1 again: ATKD.WAT1 times out), so the GPU
+ * stays powered with its link up. ASUSATKD (ABI 4, Eco reassert) calls GHOF when the BIOS reports Eco:
+ *   returns 0 = powered off now, 1 = BIOS not in Eco (UMAF 0, nothing done), 2 = already off (UMFG 1).
  */
-DefinitionBlock ("", "SSDT", 2, "GU605", "RP12PWR", 0x00001000)
+DefinitionBlock ("", "SSDT", 2, "GU605", "RP12PWR", 0x00001001)
 {
     External (_SB_.PC00.RP12, DeviceObj)
     External (_SB_.PC00.RP12.DL23, MethodObj)
@@ -36,6 +41,10 @@ DefinitionBlock ("", "SSDT", 2, "GU605", "RP12PWR", 0x00001000)
     External (PEP0, FieldUnitObj)
     External (HGMD, FieldUnitObj)
     External (VEND, FieldUnitObj)
+    External (UMFG, FieldUnitObj)
+    External (WOSR, FieldUnitObj)
+    External (_SB_.PC00.LPCB.EC0_.UMAF, FieldUnitObj)
+    External (_SB_.PC00.LPCB.EC0_.UFON, FieldUnitObj)
 
     If (_OSI ("Darwin"))
     {
@@ -122,6 +131,26 @@ DefinitionBlock ("", "SSDT", 2, "GU605", "RP12PWR", 0x00001000)
                 {
                     \_SB.SHPO (WAKG, Zero)
                 }
+            }
+
+            Method (GHOF, 0, Serialized)
+            {
+                If ((\_SB.PC00.LPCB.EC0.UMAF != One))
+                {
+                    Return (One)
+                }
+
+                If ((\UMFG == One))
+                {
+                    Return (0x02)
+                }
+
+                DL23 ()
+                POFF ()
+                \UMFG = One
+                \WOSR = Zero
+                \_SB.PC00.LPCB.EC0.UFON = Zero
+                Return (Zero)
             }
 
             Method (NCHK, 2, NotSerialized)

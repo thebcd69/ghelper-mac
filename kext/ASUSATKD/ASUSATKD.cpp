@@ -880,15 +880,26 @@ IOReturn ASUSATKD::ecoReassert(uint32_t *biosRet) {
 	uint32_t eco = 0, mux = 0;
 	IOReturn r = kIOReturnNotReady;
 	if (gpuReadLocked(&eco, &mux) && eco == 1 && mux == 1) {
-		uint32_t args[5] = {ATKD_DEV_DGPU, 1, 0, 0, 0};
-		uint32_t ret = 0xDEAD;
-		uint64_t t0 = uptimeNs();
-		r = wmnbIntegerLocked(ATKD_METHOD_DEVS, args, &ret);
-		writeCount++;
-		lastBiosResult = ret;
-		*biosRet = ret;
-		ATKDLOG("Eco reassert: DEVS dgpu (0x%08x) = 1 -> 0x%x (ior 0x%x, %u ms)", ATKD_DEV_DGPU, ret, r,
-		        static_cast<uint32_t>((uptimeNs() - t0) / 1000000ULL));
+		// 1) SSDT-RP12PWR rev 0x1001: GHOF = the tail of _Q3F (RP12.DL23 + POFF, UMFG 1, WOSR 0, UFON 0),
+		//    only while the EC says Eco (UMAF 1). 0 = done, 1 = UMAF 0, 2 = already off.
+		UInt32 g = 0xFF;
+		IOReturn rg = atkd->evaluateInteger("\\_SB.PC00.RP12.GHOF", &g);
+		uint32_t devsRet = 0xFFFF;
+		if (rg != kIOReturnSuccess || g == 1) {
+			// 2) As G-Helper: Eco once more (sets UMAF), then GHOF again.
+			uint32_t args[5] = {ATKD_DEV_DGPU, 1, 0, 0, 0};
+			uint64_t t0 = uptimeNs();
+			IOReturn rd = wmnbIntegerLocked(ATKD_METHOD_DEVS, args, &devsRet);
+			writeCount++;
+			lastBiosResult = devsRet;
+			ATKDLOG("Eco reassert: DEVS dgpu = 1 -> 0x%x (ior 0x%x, %u ms)", devsRet, rd,
+			        static_cast<uint32_t>((uptimeNs() - t0) / 1000000ULL));
+			g = 0xFF;
+			rg = atkd->evaluateInteger("\\_SB.PC00.RP12.GHOF", &g);
+		}
+		ATKDLOG("Eco reassert: RP12.GHOF -> %u (ior 0x%x)", g, rg);
+		*biosRet = ((g & 0xFF) << 16) | (devsRet & 0xFFFF);
+		r = rg;
 	} else {
 		ATKDLOG("Eco reassert refused: eco %u mux %u", eco, mux);
 	}
